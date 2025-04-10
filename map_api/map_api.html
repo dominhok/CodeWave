@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>긴급 대피 경로</title>
+    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=322ea1257890550e201bc03ce603c57d&libraries=services"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        body {
+            background-color: #f8f9fa;
+            color: #343a40;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 20px;
+            background: rgba(0, 122, 255, 0.1);
+            border-radius: 12px;
+            border: 1px solid rgba(0, 122, 255, 0.2);
+        }
+
+        .header h1 {
+            font-size: 2.2em;
+            color: #007AFF;
+            margin-bottom: 10px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+            font-weight: 500;
+            margin-bottom: 0;
+            line-height: 1.4;
+        }
+
+        .header p strong {
+            color: #007AFF;
+            font-weight: 600;
+        }
+
+        .emergency-info {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 10px;
+            font-size: 1em;
+            color: #555;
+        }
+
+        .emergency-info span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        #map {
+            width: 100%;
+            height: 500px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e9ecef;
+        }
+
+        .info-window {
+            padding: 10px 16px;
+            font-size: 15px;
+            color: #343a40;
+            background: white;
+            border-radius: 8px;
+            font-weight: 600;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e9ecef;
+        }
+
+        #goBtn {
+            display: none;
+            width: 100%;
+            padding: 18px 20px;
+            font-size: 1.3em;
+            color: white;
+            background-color: #007AFF;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            text-decoration: none;
+            text-align: center;
+            transition: all 0.3s;
+            margin-top: 20px;
+            box-shadow: 0 4px 10px rgba(0, 122, 255, 0.2);
+            font-weight: 700;
+        }
+
+        #goBtn:hover {
+            background-color: #0056b3;
+            transform: translateY(-2px);
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 18px;
+            background: white;
+            border-radius: 8px;
+            font-size: 1.1em;
+            color: #666;
+            border: 1px solid #e9ecef;
+            font-weight: 500;
+        }
+
+        .emergency-alert {
+            background: #007AFF;
+            color: white;
+            padding: 14px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 1.1em;
+            box-shadow: 0 4px 10px rgba(0, 122, 255, 0.2);
+            letter-spacing: -0.3px;
+        }
+
+        .emergency-alert span {
+            margin-right: 12px;
+            font-size: 1.2em;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
+        }
+
+        #goBtn {
+            animation: pulse 2s infinite;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            .header h1 {
+                font-size: 2em;
+            }
+            #map {
+                height: 50vh;
+            }
+            #goBtn {
+                font-size: 1.2em;
+                padding: 16px 20px;
+            }
+            .emergency-alert {
+                font-size: 1em;
+                padding: 14px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚨 긴급 대피 경로</h1>
+            <p><strong id="disaster-location">서울시 강남구</strong>에서 <strong id="disaster-type">지진</strong>이 발생하였습니다.<br></p>
+            <div class="emergency-info">
+                <span>🕒 <span id="current-time">--:--</span></span>
+                <span>📍 현 위치와의 거리: <span id="disaster-distance">3.7km</span></span>
+            </div>
+        </div>
+        <div class="emergency-alert">
+            <span>⚡ 현재 위치에서 안전한 대피소까지 경로를 안내합니다</span>
+        </div>
+        <div id="map"></div>
+        <a id="goBtn" href="#" target="_blank">
+            🚶‍♂️ 안전한 대피 경로 안내 받기
+        </a>
+        <div class="status">
+            ✨ 응급상황은 119 또는 112로 신고 바랍니다.
+        </div>
+    </div>
+
+    <script>
+        // Disaster information variables
+        const disasterInfo = {
+            location: '서울시 강남구',
+            type: '지진',
+            scale: '규모 3.5',
+            time: '14:23',
+            distance: '3.7km',
+            coordinates: {  // 재난 발생 위치 좌표
+                lat: 37.498095,
+                lng: 127.027610
+            },
+            radius: 5000  // 위험 반경 (미터 단위)
+        };
+
+        // Update disaster information
+        document.getElementById('disaster-location').textContent = disasterInfo.location;
+        document.getElementById('disaster-type').textContent = disasterInfo.type;
+        document.getElementById('disaster-distance').textContent = disasterInfo.distance;
+
+        // Add current time update function
+        function updateCurrentTime() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('current-time').textContent = `${hours}:${minutes}`;
+        }
+        
+        // Update time immediately and every minute
+        updateCurrentTime();
+        setInterval(updateCurrentTime, 60000);
+
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(function(position) {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                const locPosition = new kakao.maps.LatLng(lat, lng);
+
+                const mapContainer = document.getElementById('map');
+                const mapOption = {
+                    center: locPosition,
+                    level: 7  // 지도 레벨을 조금 높여서 더 넓은 영역 표시
+                };
+
+                const map = new kakao.maps.Map(mapContainer, mapOption);
+
+                // 현재 위치 마커
+                const marker = new kakao.maps.Marker({
+                    position: locPosition,
+                    map: map
+                });
+
+                const iwContent = '<div class="info-window">📍 현재 위치</div>';
+                const customOverlay = new kakao.maps.CustomOverlay({
+                    position: locPosition,
+                    content: iwContent,
+                    yAnchor: 1.5
+                });
+                customOverlay.setMap(map);
+
+                // 재난 발생 위치 마커
+                const disasterPosition = new kakao.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng);
+                const disasterMarker = new kakao.maps.Marker({
+                    position: disasterPosition,
+                    map: map
+                });
+
+                // 재난 위치 정보창
+                const disasterOverlay = new kakao.maps.CustomOverlay({
+                    position: disasterPosition,
+                    content: '<div class="info-window" style="background: rgba(255, 59, 48, 0.1); border-color: rgba(255, 59, 48, 0.5);">⚠️ 재난 발생 지점</div>',
+                    yAnchor: 1.5
+                });
+                disasterOverlay.setMap(map);
+
+                // 위험 반경 원 그리기
+                const circle = new kakao.maps.Circle({
+                    center: disasterPosition,
+                    radius: disasterInfo.radius,
+                    strokeWeight: 1,
+                    strokeColor: '#FF3B30',
+                    strokeOpacity: 0.7,
+                    strokeStyle: 'solid',
+                    fillColor: '#FF3B30',
+                    fillOpacity: 0.15
+                });
+                circle.setMap(map);
+
+                // 지도 범위를 재설정하여 모든 마커가 보이도록 함
+                const bounds = new kakao.maps.LatLngBounds();
+                bounds.extend(locPosition);
+                bounds.extend(disasterPosition);
+                map.setBounds(bounds);
+
+                const ps = new kakao.maps.services.Places();
+                const keyword = "시장";
+
+                ps.keywordSearch(keyword, function(data, status) {
+                    if (status === kakao.maps.services.Status.OK) {
+                        const nearest = data[0];
+                        const destLat = nearest.y;
+                        const destLng = nearest.x;
+                        const destName = nearest.place_name;
+
+                        const shelterPos = new kakao.maps.LatLng(destLat, destLng);
+                        const shelterMarker = new kakao.maps.Marker({
+                            position: shelterPos,
+                            map: map
+                        });
+
+                        const shelterOverlay = new kakao.maps.CustomOverlay({
+                            position: shelterPos,
+                            content: `<div class="info-window">${destName} 🏥</div>`,
+                            yAnchor: 1.5
+                        });
+                        shelterOverlay.setMap(map);
+
+                        // 2초 후에 현재 위치와 대피소 중심으로 지도 재조정
+                        setTimeout(() => {
+                            // 현재 위치와 대피소만을 기준으로 경계 설정
+                            const routeBounds = new kakao.maps.LatLngBounds();
+                            routeBounds.extend(locPosition);
+                            routeBounds.extend(shelterPos);
+                            
+                            // 여유 공간을 위해 영역 확장
+                            const padding = 100; // 픽셀 단위의 여유 공간
+                            map.setBounds(routeBounds, padding);
+
+                            // 현재 위치와 대피소의 중간 지점을 계산
+                            const centerLat = (locPosition.getLat() + shelterPos.getLat()) / 2;
+                            const centerLng = (locPosition.getLng() + shelterPos.getLng()) / 2;
+                            const centerPosition = new kakao.maps.LatLng(centerLat, centerLng);
+                            
+                            // 부드러운 패닝으로 이동
+                            map.panTo(centerPosition);
+
+                            // 상태 메시지 업데이트
+                            document.querySelector('.status').textContent = 
+                                '✨ 가장 가까운 대피소까지의 안전한 경로를 확인해주세요.';
+                        }, 2000);  // 2초로 변경
+
+                        const btn = document.getElementById("goBtn");
+                        const mapUrl = new URL('https://map.kakao.com/');
+                        mapUrl.searchParams.append('target', 'walk');
+                        mapUrl.searchParams.append('sName', '내위치');
+                        mapUrl.searchParams.append('sx', lat);
+                        mapUrl.searchParams.append('sy', lng);
+                        mapUrl.searchParams.append('eName', destName);
+                        mapUrl.searchParams.append('ex', destLat);
+                        mapUrl.searchParams.append('ey', destLng);
+                        btn.href = mapUrl.toString();
+                        btn.style.display = "block";
+                    } else {
+                        alert("검색에 실패했습니다. 잠시 후 다시 시도해주세요.");
+                    }
+                }, {
+                    location: locPosition,
+                    radius: 10000
+                });
+
+            }, function(error) {
+                alert('위치 정보를 가져올 수 없습니다. 위치 접근 권한을 확인해주세요.');
+            });
+        } else {
+            alert('이 브라우저에서는 위치 정보를 지원하지 않습니다.');
+        }
+    </script>
+</body>
+</html> 

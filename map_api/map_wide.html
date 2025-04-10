@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>긴급 대피 경로</title>
+  <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=322ea1257890550e201bc03ce603c57d&libraries=services"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    body {
+      background-color: #f8f9fa;
+      color: #1a3320;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .top-banner {
+      background: rgba(0, 122, 255, 0.1);
+      color: #007AFF;
+      padding: 12px;
+      text-align: center;
+      font-weight: 600;
+      font-size: 1.1em;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(0, 122, 255, 0.2);
+    }
+    .container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding-top: 50px;
+    }
+    .map-container {
+      flex: 1;
+      position: relative;
+      height: calc(100vh - 180px);
+      min-height: 400px;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+    }
+    .info-window {
+      padding: 8px 12px;
+      font-size: 14px;
+      color: #1a3320;
+      background: white;
+      border-radius: 6px;
+      font-weight: 600;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      border: 1px solid rgba(0, 122, 255, 0.2);
+    }
+    .bottom-panel {
+      background: white;
+      padding: 20px;
+      border-top-left-radius: 20px;
+      border-top-right-radius: 20px;
+      box-shadow: 0 -4px 10px rgba(0,0,0,0.1);
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+    }
+    .status {
+      color: #666;
+      font-size: 0.9em;
+      font-weight: 500;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #goBtn {
+      display: none;
+      width: 100%;
+      padding: 16px;
+      font-size: 1.1em;
+      color: white;
+      background-color: #007AFF;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      text-decoration: none;
+      text-align: center;
+      font-weight: 700;
+      transition: all 0.3s;
+      box-shadow: 0 4px 10px rgba(0, 122, 255, 0.2);
+    }
+    #goBtn:hover {
+      background-color: #0056b3;
+      transform: translateY(-2px);
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.02); }
+      100% { transform: scale(1); }
+    }
+    #goBtn {
+      animation: pulse 2s infinite;
+    }
+    @media (max-width: 768px) {
+      .map-container {
+        height: calc(100vh - 160px);
+      }
+      .bottom-panel {
+        padding: 16px;
+      }
+      #goBtn {
+        padding: 14px;
+        font-size: 1em;
+      }
+      .top-banner {
+        font-size: 0.9em;
+        padding: 10px;
+        background: rgba(0, 122, 255, 0.15);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="top-banner">
+    <span>⚡</span> 긴급 대피 경로를 안내해드립니다
+  </div>
+  
+  <div class="container">
+    <div class="map-container">
+      <div id="map"></div>
+    </div>
+    
+    <div class="bottom-panel">
+      <div class="status">
+        <span>✨</span> 실시간으로 가장 안전한 대피 경로를 확인 중입니다. . .
+      </div>
+      <a id="goBtn" href="#" target="_blank">
+        🚶‍♂️ 안전한 대피 경로 안내 받기
+      </a>
+    </div>
+  </div>
+
+  <script>
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(function(position) {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const locPosition = new kakao.maps.LatLng(lat, lng);
+
+        const mapContainer = document.getElementById('map');
+        const mapOption = {
+          center: locPosition,
+          level: 4
+        };
+
+        const map = new kakao.maps.Map(mapContainer, mapOption);
+
+        const marker = new kakao.maps.Marker({
+          position: locPosition,
+          map: map
+        });
+
+        const iwContent = '<div class="info-window">📍 현재 위치</div>';
+        const customOverlay = new kakao.maps.CustomOverlay({
+          position: locPosition,
+          content: iwContent,
+          yAnchor: 1.5
+        });
+        customOverlay.setMap(map);
+
+        const ps = new kakao.maps.services.Places();
+        const keyword = "시장";
+
+        ps.keywordSearch(keyword, function(data, status) {
+          if (status === kakao.maps.services.Status.OK) {
+            const nearest = data[0];
+            const destLat = nearest.y;
+            const destLng = nearest.x;
+            const destName = nearest.place_name;
+
+            const shelterPos = new kakao.maps.LatLng(destLat, destLng);
+            const shelterMarker = new kakao.maps.Marker({
+              position: shelterPos,
+              map: map
+            });
+
+            const shelterOverlay = new kakao.maps.CustomOverlay({
+              position: shelterPos,
+              content: `<div class="info-window">${destName} 🏥</div>`,
+              yAnchor: 1.5
+            });
+            shelterOverlay.setMap(map);
+
+            const btn = document.getElementById("goBtn");
+            const mapUrl = new URL('https://map.kakao.com/');
+            mapUrl.searchParams.append('target', 'walk');
+            mapUrl.searchParams.append('sName', '내위치');
+            mapUrl.searchParams.append('sx', lat);
+            mapUrl.searchParams.append('sy', lng);
+            mapUrl.searchParams.append('eName', destName);
+            mapUrl.searchParams.append('ex', destLat);
+            mapUrl.searchParams.append('ey', destLng);
+            btn.href = mapUrl.toString();
+            btn.style.display = "block";
+          } else {
+            alert("검색에 실패했습니다. 잠시 후 다시 시도해주세요.");
+          }
+        }, {
+          location: locPosition,
+          radius: 10000
+        });
+
+      }, function(error) {
+        alert('위치 정보를 가져올 수 없습니다. 위치 접근 권한을 확인해주세요.');
+      });
+    } else {
+      alert('이 브라우저에서는 위치 정보를 지원하지 않습니다.');
+    }
+  </script>
+</body>
+</html>

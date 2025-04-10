@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>내 위치 지도</title>
+  <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=322ea1257890550e201bc03ce603c57d&libraries=services"></script>
+  <style>
+    #map { width: 100%; height: 500px; margin-bottom: 1em; }
+    #goBtn { display: inline-block; padding: 10px 15px; background: #ff7f50; color: white; font-weight: bold; border: none; border-radius: 10px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>나의 현재 위치</h1>
+  <div id="map"></div>
+  <a id="goBtn" target="_blank" style="display:none;">🚶‍♀️ 가장 가까운 피난처 길찾기</a>
+
+  <script>
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(function(position) {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        const locPosition = new kakao.maps.LatLng(lat, lng);
+
+        const mapContainer = document.getElementById('map');
+        const mapOption = {
+          center: locPosition,
+          level: 4
+        };
+
+        const map = new kakao.maps.Map(mapContainer, mapOption);
+
+        const marker = new kakao.maps.Marker({
+          position: locPosition,
+          map: map
+        });
+
+        const iwContent = '<div style="padding:5px;">You are here</div>';
+        const infowindow = new kakao.maps.InfoWindow({
+          content: iwContent
+        });
+        infowindow.open(map, marker);
+
+        // 💥 검색 서비스 준비
+        const ps = new kakao.maps.services.Places();
+        const keyword = "시장";
+
+        ps.keywordSearch(keyword, function(data, status) {
+          if (status === kakao.maps.services.Status.OK) {
+            // 가장 가까운 피난처 선택
+            const nearest = data[0];
+            const destLat = nearest.y;
+            const destLng = nearest.x;
+            const destName = nearest.place_name;
+
+            // 📍 피난처 마커 표시
+            const shelterPos = new kakao.maps.LatLng(destLat, destLng);
+            const shelterMarker = new kakao.maps.Marker({
+              position: shelterPos,
+              map: map
+            });
+
+            const shelterInfo = new kakao.maps.InfoWindow({
+              content: `<div style="padding:5px;">${destName} 🛟</div>`
+            });
+            shelterInfo.open(map, shelterMarker);
+
+            // 💌 길찾기 버튼 링크 설정
+            const btn = document.getElementById("goBtn");
+            btn.href = `https://map.kakao.com/link/to/${encodeURIComponent(destName)},${destLat},${destLng}`;
+            btn.style.display = "inline-block";
+          } else {
+            alert("피난처 검색 실패 😢");
+          }
+        }, {
+          location: locPosition,
+          radius: 5000 // 반경 5km 내 검색
+        });
+
+      }, function(error) {
+        alert('위치 정보를 가져오지 못함 😢');
+      });
+    } else {
+      alert('브라우저가 위치 정보를 지원하지 않음 😓');
+    }
+  </script>
+</body>
+</html>

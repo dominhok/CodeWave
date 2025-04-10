@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>대피소 검색</title>
+</head>
+<body>
+  <h1>대피소 검색</h1>
+  
+  <!-- 지역명 입력 받기 -->
+  <label for="region">지역명 입력: </label>
+  <input type="text" id="region" placeholder="지역명 입력 (예: 서울특별시)">
+  <button onclick="searchShelters()">대피소 검색</button>
+
+  <div id="shelter-list"></div>  <!-- 대피소 리스트가 표시될 영역 -->
+  
+  <script>
+    function searchShelters() {
+      const region = document.getElementById('region').value.trim();  // 사용자가 입력한 지역명 가져오기
+      if (!region) {
+        alert('지역명을 입력해주세요.');
+        return;
+      }
+
+      // CORS 우회 URL (CORS Anywhere 사용)
+      const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
+      const apiUrl = `https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=${encodeURIComponent('4NJY4E848O20G443')}&region=${encodeURIComponent(region)}&numOfRows=10&page=1`;
+
+      // 대피소 정보를 API에서 받아오기
+      fetch(proxyUrl + apiUrl)
+        .then(response => response.json())
+        .then(data => {
+          console.log(data);  // 응답 데이터를 출력하여 확인합니다.
+          
+          if (data.response && data.response.header && data.response.header.resultCode === "00") {
+            const shelters = data.response.body.items;
+            const shelterListDiv = document.getElementById('shelter-list');
+            shelterListDiv.innerHTML = '';  // 이전 결과 지우기
+            
+            if (shelters.length === 0) {
+              shelterListDiv.innerHTML = '<p>대피소 정보가 없습니다.</p>';
+            } else {
+              shelters.forEach(shelter => {
+                const shelterInfo = `
+                  <div style="margin-bottom: 15px;">
+                    <h3>${shelter.shelterName}</h3>
+                    <p>위도: ${shelter.latitude}, 경도: ${shelter.longitude}</p>
+                    <p>주소: ${shelter.address}</p>
+                    <hr>
+                  </div>
+                `;
+                shelterListDiv.innerHTML += shelterInfo;
+              });
+            }
+          } else {
+            console.error('API 응답 실패:', data.response ? data.response.header.resultMsg : '응답 데이터가 없습니다.');
+            alert('대피소 데이터를 가져오는 데 실패했습니다.');
+          }
+        })
+        .catch(error => {
+          console.error('API 요청 중 오류가 발생했습니다:', error);
+          alert('대피소 데이터를 가져오는 중 오류가 발생했습니다.');
+        });
+    }
+  </script>
+</body>
+</html>
+
