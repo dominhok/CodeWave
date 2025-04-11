@@ -285,78 +285,79 @@
   padding: 80px 0;
 }
 .contact-container {
-  background-color: #f3eefc; 
-  max-width: 1900px; 
-  margin: 0 auto; 
+  background-color: #f3eefc;
+  max-width: 1900px;
+  margin: 0 auto;
   display: flex;
   width: 100%;
 }
-/* 기본 폼 스타일 */
-.form-group {
-  margin-bottom: 15px;
-}
-.form-group label {
-  display: block;
-  font-size: 16px;
-  margin-bottom: 5px;
-}
-/* 인풋 섹션 */
+/* Left Form Section */
 .input-section {
   flex: 1;
-  padding: 40px;
+  padding: 60px;
   min-width: 460px;
 }
 .input-section h1 {
   font-family: 'Poppins', sans-serif;
   font-size: 36px;
   font-weight: bold;
-  color: #000000;
-  margin: 20px 0 20px 0;
+  color: #000;
+  margin-bottom: 30px;
 }
 .contact-form {
   display: flex;
   flex-direction: column;
 }
-.contact-form input,
+.form-group {
+  margin-bottom: 18px;
+}
+.form-group label {
+  display: block;
+  font-size: 16px;
+  margin-bottom: 4px;
+  color: #333;
+}
+.form-group input,
+.form-group select {
+  max-width: 2000px;          /* 너비 제한해서 너무 넓어지지 않게 */
+  box-sizing: border-box;    /* padding 포함한 전체 width 계산 */
+}
+.contact-form input[type="text"],
+.contact-form input[type="tel"],
 .contact-form textarea,
 .contact-form select,
 .contact-form button {
-  width: calc(100% - 20px);
+  width: 100%;
   padding: 12px;
-  border-radius: 5px;
+  border-radius: 6px;
   border: 1px solid #ccc;
-}
-.contact-form select {
-  width: calc(100%);
-}
-.phone-input {
-  display: flex;
-  gap: 10px;
+  font-family: 'Poppins', sans-serif;
 }
 textarea {
-  font-family: 'Poppins', sans-serif;
   resize: none;
 }
 .contact-form button {
-  width: calc(100%);
   background-color: #2b472c;
   color: white;
-  transition: background-color 0.3s ease-out;
+  transition: background-color 0.3s ease;
 }
 .contact-form button:hover {
   background-color: #3d5f48;
   cursor: pointer;
 }
-/* 이미지 섹션 */
-.image-section {
-  flex: 1; 
-  overflow: hidden; 
+.guardian-phone {
+  margin-top: 10px;
 }
 
+/* Right Image Section */
+.image-section {
+  flex: 1;
+  overflow: hidden;
+}
 .image-section img {
   max-width: none;
   width: 100%;
-  height: 100%; 
+  height: 100%;
   object-fit: cover;
 }
 

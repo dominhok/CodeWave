@@ -1,0 +1,93 @@
+# Environment variables
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.hypothesis/
+.pytest_cache/
+cover/
+local_settings.py
+instance/
+.ipynb_checkpoints
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# package-lock.json # Keep root one for now as requested
+# yarn.lock
+
+# Frontend Build output
+/frontend/build/
+/flask_twilio_demo/static/app/
+
+# Database files
+*.db
+*.sqlite3
+users.db
+
+# Vectorstore
+faiss_disaster_manuals/
+
+# SSL certificates
+*.pem
+*.crt
+*.key
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE / Editor folders
+.idea/
+.vscode/
+*.swp
+*~
+
+# Custom / Project Specific
+test_venv/
+
+# Exclude video files in frontend
+frontend/**/*.mp4
+
+# Add any other rules or changes here
+# ... 
