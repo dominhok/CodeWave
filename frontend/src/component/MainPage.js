@@ -4,6 +4,9 @@ import '../assets/css/MainPage.css';
 import rainVideo from '../assets/videos/rain4.mp4';
 import gpsImage from '../assets/img/gps_img.jpg';
 import contact from '../assets/img/contactUs.jpg';
+import elderly from '../assets/img/elderly3.jpg';
+import vid2 from '../assets/videos/vid2.mp4';
+import vid3 from '../assets/videos/vid3.mp4';
 
 function MainPage() {
 
@@ -116,7 +119,7 @@ function MainPage() {
               <h2>Our Vision</h2>
             </div>
             <div className="our-story-description">
-              <p>Protecting lives, securing communities.</p>
+              <p>Protecting lives, securing vulnerable communities.</p>
               <p>We are dedicated to providing timely, accurate disaster alerts.</p>
             </div>
           </div>
@@ -127,13 +130,11 @@ function MainPage() {
         <div className="info-container">
           <div className="info-card">
             <div className="info-image">
-              <img src={gpsImage} alt="Location Tracking" />
+              <img src={elderly} alt="Location Tracking" />
             </div>
             <div className="info-text">
-              <h3>Precise Location Tracking</h3>
-              <p>
-                Real-time alerts and precise location tracking offer unparalleled safety during critical moments of natural disasters.
-              </p>
+              <h3>Emergency Alerts for the Vulnerable</h3>
+              <p>Get real-time disaster alerts and phone assistance, tailored to the needs of vulnerable individuals, to stay safe during emergencies.</p>
               <button className="info-button" onClick={() => scrollToSection(contactSectionRef)}>Contact Us</button>
             </div>
           </div>
@@ -153,16 +154,16 @@ function MainPage() {
             </div>
             <div className="feature-card">
               <div className="feature-icon">❄️</div>
-              <h3>Live Tracking</h3>
+              <h3>AI Report</h3>
               <p>
-                Access expert advice on how to prepare for and respond to various natural disasters effectively.
+              Report emergencies on your behalf based on your personal situation.
               </p>
             </div>
             <div className="feature-card">
               <div className="feature-icon">❄️</div>
-              <h3>Safety Tips</h3>
+              <h3>Shelter Map</h3>
               <p>
-                Access expert advice on how to prepare for and respond to various natural disasters effectively.
+              Provides shelter information and guidance maps tailored to each type of natural disaster.
               </p>
             </div>
           </div>
@@ -170,109 +171,111 @@ function MainPage() {
       </section>
 
       <section ref={contactSectionRef} className="contact-section">
-  <div className="contact-container">
+        <div className="contact-container">
 
-    {/* Left Input Form */}
-    <div className="input-section">
-      <h1>Contact Us</h1>
-      <form className="contact-form" onSubmit={handleSubmit}>
+          {/* Left Input Form */}
+          <div className="input-section">
+            <div className="contact-header">
+              <h1>Contact Us</h1>
+              <a href="mailto:your-email@example.com">Contact for bulk user support</a>
+            </div>
+            <form className="contact-form" onSubmit={handleSubmit}>
 
-        {/* Who you are (Dropdown) */}
-        <div className="form-group">
-          <label htmlFor="personType">Who are you?</label>
-          <select
-            id="personType"
-            name="personType"
-            value={formData.personType}
-            onChange={handleChange}
-            required
-          >
-            <option value="" disabled selected>Select your situation</option>
-            <option value="elderly">Elderly / Living Alone / Pregnant / Guardian of Infant / Mobility Issues</option>
-            <option value="visual">Visually Impaired</option>
-            <option value="hearing">Hearing Impaired</option>
-            <option value="foreigner">Foreigner / Refugee</option>
-            <option value="other">Other</option>
-          </select>
+              {/* Who you are (Dropdown) */}
+              <div className="form-group">
+                <label htmlFor="personType">Who are you?</label>
+                <select
+                  id="personType"
+                  name="personType"
+                  value={formData.personType}
+                  onChange={handleChange}
+                  required
+                >
+                  <option value="" disabled selected>Select your situation</option>
+                  <option value="elderly">Elderly / Living Alone / Pregnant / Guardian of Infant / Mobility Issues</option>
+                  <option value="visual">Visually Impaired</option>
+                  <option value="hearing">Hearing Impaired</option>
+                  <option value="foreigner">Foreigner / Refugee</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+
+              {/* Address */}
+              <div className="form-group">
+                <label htmlFor="address">Address</label>
+                <input
+                  type="text"
+                  id="address"
+                  name="address"
+                  placeholder="Enter your full residential address"
+                  value={formData.address}
+                  onChange={handleChange}
+                  required
+                />
+              </div>
+
+              {/* International Phone Number */}
+              <div className="form-group">
+                <label htmlFor="phone">Phone Number (International)</label>
+                <input
+                  type="tel"
+                  id="phone"
+                  name="phone"
+                  placeholder="e.g., +82 10-1234-5678"
+                  value={formData.phone}
+                  onChange={handleChange}
+                  required
+                />
+              </div>
+
+              {/* Guardian Connection */}
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    name="hasGuardian"
+                    checked={formData.hasGuardian}
+                    onChange={(e) => setFormData({ ...formData, hasGuardian: e.target.checked })}
+                  />
+                  &nbsp;I would like to connect a guardian
+                </label>
+                {formData.hasGuardian && (
+                  <input
+                    type="tel"
+                    name="guardianPhone"
+                    placeholder="Guardian's phone number (e.g., +82 10-0000-0000)"
+                    value={formData.guardianPhone}
+                    onChange={handleChange}
+                    className="guardian-phone"
+                  />
+                )}
+              </div>
+              
+              {/* Request Phone Guidance */}
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    name="needCall"
+                    checked={formData.needCall}
+                    onChange={(e) => setFormData({ ...formData, needCall: e.target.checked })}
+                  />
+                  &nbsp;I would like a guidance call from a support agent
+                </label>
+              </div>
+              
+              {/* Submit Button */}
+              <button type="submit">Submit &gt;&gt;</button>
+            </form>
+          </div>
+              
+          {/* Right Image Section - Unchanged */}
+          <div className="image-section">
+            <img src={contact} alt="Contact Us" />
+          </div>
+              
         </div>
-
-        {/* Address */}
-        <div className="form-group">
-          <label htmlFor="address">Address</label>
-          <input
-            type="text"
-            id="address"
-            name="address"
-            placeholder="Enter your full residential address"
-            value={formData.address}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        {/* International Phone Number */}
-        <div className="form-group">
-          <label htmlFor="phone">Phone Number (International)</label>
-          <input
-            type="tel"
-            id="phone"
-            name="phone"
-            placeholder="e.g., +82 10-1234-5678"
-            value={formData.phone}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        {/* Guardian Connection */}
-        <div className="form-group">
-          <label>
-            <input
-              type="checkbox"
-              name="hasGuardian"
-              checked={formData.hasGuardian}
-              onChange={(e) => setFormData({ ...formData, hasGuardian: e.target.checked })}
-            />
-            &nbsp;I would like to connect a guardian
-          </label>
-          {formData.hasGuardian && (
-            <input
-              type="tel"
-              name="guardianPhone"
-              placeholder="Guardian's phone number (e.g., +82 10-0000-0000)"
-              value={formData.guardianPhone}
-              onChange={handleChange}
-              className="guardian-phone"
-            />
-          )}
-        </div>
-
-        {/* Request Phone Guidance */}
-        <div className="form-group">
-          <label>
-            <input
-              type="checkbox"
-              name="needCall"
-              checked={formData.needCall}
-              onChange={(e) => setFormData({ ...formData, needCall: e.target.checked })}
-            />
-            &nbsp;I would like a guidance call from a support agent
-          </label>
-        </div>
-
-        {/* Submit Button */}
-        <button type="submit">Submit &gt;&gt;</button>
-      </form>
-    </div>
-
-    {/* Right Image Section - Unchanged */}
-    <div className="image-section">
-      <img src={contact} alt="Contact Us" />
-    </div>
-
-  </div>
-</section>
-
+      </section>
 
       <footer className="footer-section">
         <div className="footer-container">
@@ -300,5 +303,5 @@ function MainPage() {
   </div>
   );
 }
-//           <img src={gpsImage} alt="Contact Us"/>
+
 export default MainPage;
