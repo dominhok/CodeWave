@@ -78,17 +78,6 @@
             border: 1px solid #e9ecef;
         }
 
-        .info-window {
-            padding: 10px 16px;
-            font-size: 15px;
-            color: #343a40;
-            background: white;
-            border-radius: 8px;
-            font-weight: 600;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-            border: 1px solid #e9ecef;
-        }
-
         #goBtn {
             display: none;
             width: 100%;
@@ -221,8 +210,8 @@
                 name: "Seongdong District Office",
                 type: "Emergency Shelter",
                 address: "39 Wangsan-ro, Seongdong-gu, Seoul",
-                lat: 37.563456,  // 성동구청 좌표
-                lng: 127.036992
+                lat: 37.5513455,  // 성동구청 좌표
+                lng: 127.0726955
             };
         };
 
@@ -284,21 +273,7 @@
                     const currentMarker = new naver.maps.Marker({
                         position: new naver.maps.LatLng(currentLocation.lat, currentLocation.lng),
                         map: map,
-                        icon: {
-                            content: `
-                                <div style="position:relative;cursor:pointer;" class="marker-container">
-                                    <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);">
-                                        <div style="position:relative;width:24px;height:24px;">
-                                            <div style="position:absolute;top:-36px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:16px solid #007AFF;"></div>
-                                            <div style="position:absolute;top:-40px;left:50%;transform:translateX(-50%);width:12px;height:12px;background:#007AFF;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);"></div>
-                                        </div>
-                                    </div>
-                                    <div class="info-window" style="background:white;border:2px solid #007AFF;color:#007AFF;position:absolute;white-space:nowrap;top:-80px;left:50%;transform:translateX(-50%);box-shadow:0 2px 6px rgba(0,0,0,0.2);padding:8px 12px;border-radius:6px;z-index:1;">
-                                        📍 Current Location
-                                    </div>
-                                </div>
-                            `
-                        },
+                        title: 'Current Location',
                         zIndex: 100
                     });
 
@@ -306,16 +281,7 @@
                     const disasterMarker = new naver.maps.Marker({
                         position: new naver.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng),
                         map: map,
-                        icon: {
-                            content: `
-                                <div style="position:relative;cursor:pointer;" class="marker-container">
-                                    <div class="info-window" style="background:white;border:2px solid #FF3B30;color:#FF3B30;position:relative;box-shadow:0 2px 6px rgba(0,0,0,0.2);padding:8px 12px;border-radius:6px;z-index:1;">
-                                        <div style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:10px solid #FF3B30;"></div>
-                                        ⚠️ Disaster Point
-                                    </div>
-                                </div>
-                            `
-                        },
+                        title: 'Disaster Point',
                         zIndex: 99
                     });
 
@@ -323,15 +289,13 @@
                     const shelterMarker = new naver.maps.Marker({
                         position: new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng),
                         map: map,
+                        visible: false,
+                        title: `Shelter: ${shelterInfo.name}`,
                         icon: {
-                            content: `
-                                <div style="position:relative;cursor:pointer;" class="marker-container">
-                                    <div class="info-window" style="background:white;border:2px solid #34C759;color:#34C759;position:relative;box-shadow:0 2px 6px rgba(0,0,0,0.2);padding:8px 12px;border-radius:6px;z-index:1;">
-                                        <div style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:10px solid #34C759;"></div>
-                                        🏥 ${shelterInfo.name}
-                                    </div>
-                                </div>
-                            `
+                            url: '/static/img/shelter.png',
+                            size: new naver.maps.Size(36, 36),
+                            origin: new naver.maps.Point(0, 0),
+                            anchor: new naver.maps.Point(18, 36)
                         },
                         zIndex: 98
                     });
@@ -404,6 +368,8 @@
                         const centerLat = (currentLocation.lat + shelterInfo.lat) / 2;
                         const centerLng = (currentLocation.lng + shelterInfo.lng) / 2;
                         
+                        shelterMarker.setVisible(true);
+
                         map.morph(new naver.maps.LatLng(centerLat, centerLng), 15, {
                             duration: 2000,
                             easing: 'easeOutCubic'
