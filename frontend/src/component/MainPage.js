@@ -5,8 +5,7 @@ import rainVideo from '../assets/videos/rain4.mp4';
 import gpsImage from '../assets/img/gps_img.jpg';
 import contact from '../assets/img/contactUs.jpg';
 import elderly from '../assets/img/elderly3.jpg';
-import vid2 from '../assets/videos/vid2.mp4';
-import vid3 from '../assets/videos/vid3.mp4';
+import vid4 from '../assets/videos/vid4.mp4';
 
 function MainPage() {
 
@@ -33,7 +32,7 @@ function MainPage() {
     if (!video) return;
 
     const loopSection = () => {
-      if (video.currentTime >= 30) {
+      if (video.currentTime >= 7) {
         video.currentTime = 0;
         video.play();
       }
@@ -98,9 +97,10 @@ function MainPage() {
           autoPlay
           muted
           playsInline
+          loop
           className="background-video"
         >
-          <source src={rainVideo} type="video/mp4" />
+          <source src={vid4} type="video/mp4" />
           Your browser does not support the video tag.
         </video>
         <div className="video-overlay" /> {/* 어두운 레이어 */}
@@ -197,6 +197,26 @@ function MainPage() {
                   <option value="hearing">Hearing Impaired</option>
                   <option value="foreigner">Foreigner / Refugee</option>
                   <option value="other">Other</option>
+                </select>
+              </div>
+
+              {/* Preferred Language */}
+              <div className="form-group">
+                <label htmlFor="preferredLanguage">Preferred Language</label>
+                <select
+                  id="preferredLanguage"
+                  name="preferredLanguage"
+                  value={formData.preferredLanguage}
+                  onChange={handleChange}
+                  required
+                >
+                  <option value="" disabled selected>Select your language</option>
+                  <option value="en">English</option>
+                  <option value="ko">한국어</option>
+                  <option value="zh">中文</option>
+                  <option value="ja">日本語</option>
+                  <option value="hi">हिन्दी</option>
+                  <option value="other">Other / 기타</option>
                 </select>
               </div>
 
