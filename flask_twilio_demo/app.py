@@ -23,6 +23,7 @@ from datetime import datetime
 import re # Import regex module
 import math
 from math import radians, cos, sin, asin, sqrt # Import math functions for Haversine
+import anthropic # Import Anthropic library
 
 from . import models
 from .models import Base, engine, User, get_db
@@ -315,7 +316,58 @@ def translate_ko_to_en(text: str) -> Optional[str]:
     except Exception as e:
         logging.error(f"Error during Upstage translation KO>EN: {e}", exc_info=True)
         return None
-# ----------------------------------
+
+# --- LLM Based Voice Response Interpretation (Using Anthropic Claude) --- 
+def interpret_voice_response(speech_text: str, alert_context: str) -> int:
+    """
+    Analyzes the user's voice response using Anthropic Claude to determine if follow-up is needed.
+    Returns 1 if report/assistance needed, 0 otherwise.
+    """
+    if not speech_text:
+        logging.debug("Interpret request skipped: Empty speech text.")
+        return 0
+    
+    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not anthropic_api_key:
+        logging.error("ANTHROPIC_API_KEY not found in environment variables. Cannot interpret voice response.")
+        return 0
+        
+    try:
+        client = anthropic.Anthropic(api_key=anthropic_api_key)
+
+        prompt = f"""Task: Analyze the user's voice response regarding a disaster alert. Determine if the user wants to report something specific, needs help, or is indicating an emergency situation requiring follow-up. Output ONLY '1' if a report or assistance is needed, otherwise output ONLY '0'.
+
+Original Alert Context (for reference): {alert_context}
+User's Voice Response: {speech_text}
+
+Output (1 or 0):"""
+        
+        # Log the request being sent to Claude
+        logging.info(f"Invoking Anthropic Claude to interpret voice response...")
+        logging.info(f"  User Response Sent: '{speech_text}'")
+        # logging.debug(f"  Full Prompt Sent:\n{prompt}") # Log full prompt only in debug
+
+        message = client.messages.create(
+            model="claude-3-haiku-20240307", # Use Haiku for speed and cost-effectiveness
+            max_tokens=5, # Only need 1 token for '1' or '0'
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        # Parse the response
+        interpretation_result = ""
+        if message.content and isinstance(message.content, list) and hasattr(message.content[0], 'text'):
+             interpretation_result = message.content[0].text.strip()
+        
+        logging.info(f"Anthropic Claude interpretation result: '{interpretation_result}'")
+        
+        if interpretation_result == "1":
+            return 1
+        else:
+            return 0
+            
+    except Exception as e:
+        logging.error(f"Error during Anthropic Claude voice response interpretation: {e}", exc_info=True)
+        return 0 # Default to no action on error
 
 # --- User Specific RAG Context Retrieval Helper ---
 def _get_user_specific_rag_context(db_user: User, disaster_alert: DisasterAlertData) -> str:
@@ -965,8 +1017,8 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
                 
                 # Say the main alert message with correct voice/language
                 gather.say(voice_content_final, voice=tts_voice, language=tts_code)
-                # Append the fixed reporting prompt (in the SAME language as the main message)
-                report_prompt = " 응답하시려면 '응답'이라고 말씀해주세요." if tts_code == 'ko-KR' else " If you need to report something, please say 'Report' (test prompt - adjust)."
+                # Append a more open-ended prompt for the LLM interpretation
+                report_prompt = " 도움이 필요하시면 말씀해주세요." if tts_code == 'ko-KR' else " If you need assistance, please state your request now."
                 gather.say(report_prompt, voice=tts_voice, language=tts_code)
                 
                 response.append(gather)
@@ -1134,15 +1186,22 @@ async def handle_voice_alert_response(request: Request, db: Session = Depends(ge
         logging.warning("Cannot save to DB: Caller phone number or speech result was invalid.")
     # --------------------------------
 
-    # --- Original Logic for TwiML Response (based on 'report' keyword) ---
-    logging.info(f"Checking for 'report' keyword in speech: '{speech_result}'")
-    if 'report' in speech_result:
-        logging.info(f"--> 'report' DETECTED for {caller_phone_number}.")
-        resp.say("Report request acknowledged. Ending call.", voice='Polly.Joanna', language="en-US")
-        logging.info(f"ACTION NEEDED: User {caller_phone_number} requested report regarding alert: {original_alert}")
-        print(f"ACTION NEEDED: User {caller_phone_number} requested report regarding alert: {original_alert}") 
+    # --- LLM Based TwiML Response --- 
+    # Access chat model from app state
+    # chat_model = getattr(request.app.state, 'chat_model', None) # No longer needed here
+    
+    # Interpret the speech result using LLM (now Claude)
+    report_needed_flag = interpret_voice_response(speech_result, original_alert) # Pass only required args
+    
+    if report_needed_flag == 1:
+        logging.info(f"--> Claude Interpretation: REPORT/ASSISTANCE NEEDED for {caller_phone_number}.")
+        # Update the response message to be more general for assistance requests
+        resp.say("Your request for assistance has been acknowledged. Ending call.", voice='Polly.Joanna', language="en-US")
+        logging.info(f"ACTION NEEDED: User {caller_phone_number} requested report/assistance regarding alert: {original_alert} | Response: {speech_result}")
+        print(f"ACTION NEEDED: User {caller_phone_number} requested report/assistance regarding alert: {original_alert} | Response: {speech_result}") 
     else:
-        logging.info(f"--> 'report' NOT detected for {caller_phone_number}.")
+        logging.info(f"--> Claude Interpretation: Report/Assistance NOT needed for {caller_phone_number}.")
+        # Keep the original English response for the 'no action needed' case
         resp.say("Okay. Ending call.", voice='Polly.Joanna', language="en-US")
         
     logging.info("Appending Hangup TwiML.")
