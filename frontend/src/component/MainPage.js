@@ -2,8 +2,8 @@ import React, { useRef, useEffect, useState  } from 'react';
 import '../assets/css/App.css';
 import '../assets/css/MainPage.css';
 import rainVideo from '../assets/videos/rain4.mp4';
-import gpsImage from '../assets/img/gps_img.jpg';
 import contact from '../assets/img/contactUs.jpg';
+import elderly from '../assets/img/elderly3.jpg';
 
 function MainPage() {
 
@@ -30,7 +30,7 @@ function MainPage() {
     if (!video) return;
 
     const loopSection = () => {
-      if (video.currentTime >= 30) {
+      if (video.currentTime >= 7) {
         video.currentTime = 0;
         video.play();
       }
@@ -46,14 +46,15 @@ function MainPage() {
   const [formData, setFormData] = useState({
     personType: "",
     address: "",
+    phone: "",
+    guardian: false,
+    callRequest: false,
   });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitStatus, setSubmitStatus] = useState(null);
-  const [errorMessage, setErrorMessage] = useState('');
 
   // 입력 값 변경 핸들러
   const handleChange = (e) => {
-    const { name, value } = e.target;
+    const { name, value, type, checked } = e.target;
+
     setFormData((prevData) => ({
       ...prevData,
       [name]: type === "checkbox" ? checked : value,
@@ -61,9 +62,58 @@ function MainPage() {
   };
 
   // 폼 제출 핸들러
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault(); // 기본 폼 제출 동작 방지
     console.log("Submitted Data:", formData); // 콘솔에 데이터 출력
+
+    // 백엔드로 보낼 데이터 준비 (guardianPhone 조건부 포함)
+    const dataToSend = {
+      ...formData,
+      guardianPhone: formData.hasGuardian ? formData.guardianPhone : null // 보호자 연결 시에만 값 전달
+    };
+    // 상태 필드명과 API alias가 다르므로 console.log에는 formData 그대로 출력
+    console.log("Data to send (matches frontend state):", JSON.stringify(dataToSend, null, 2));
+
+    try {
+      // 백엔드 API 엔드포인트 - 환경 변수 또는 절대 경로 사용 고려
+      const apiUrl = '/api/users/'; 
+      const response = await fetch(apiUrl, { 
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(dataToSend), // Pydantic이 alias를 사용하여 자동 변환
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('User created successfully:', result);
+        // alert('등록되었습니다! 재난 발생 시 연락드리겠습니다.'); // 성공 메시지 제거
+        // 폼 초기화
+        setFormData({ 
+          personType: "",
+          address: "",
+          phone: "",
+          hasGuardian: false,
+          guardianPhone: "", // guardianPhone도 초기화
+          needCall: false,
+          preferredLanguage: ""
+        });
+      } else {
+        let errorDetail = '서버 오류가 발생했습니다.';
+        try {
+          const errorData = await response.json();
+          errorDetail = errorData.detail || `오류 코드: ${response.status}`;
+        } catch (jsonError) {
+          errorDetail = `오류 코드: ${response.status}`;
+        }
+        console.error('Failed to create user:', response.status, errorDetail);
+        // alert(`등록 실패: ${errorDetail}`); // 실패 메시지 제거
+      }
+    } catch (error) {
+      console.error('Network error during submission:', error);
+      // alert('등록 중 네트워크 오류가 발생했습니다. 인터넷 연결을 확인해주세요.'); // 실패 메시지 제거
+    }
   };
 
   return (
@@ -93,6 +143,7 @@ function MainPage() {
           autoPlay
           muted
           playsInline
+          loop
           className="background-video"
         >
           <source src={rainVideo} type="video/mp4" />
@@ -114,7 +165,7 @@ function MainPage() {
               <h2>Our Vision</h2>
             </div>
             <div className="our-story-description">
-              <p>Protecting lives, securing communities.</p>
+              <p>Protecting lives, securing vulnerable communities.</p>
               <p>We are dedicated to providing timely, accurate disaster alerts.</p>
             </div>
           </div>
@@ -125,13 +176,11 @@ function MainPage() {
         <div className="info-container">
           <div className="info-card">
             <div className="info-image">
-              <img src={gpsImage} alt="Location Tracking" />
+              <img src={elderly} alt="Location Tracking" />
             </div>
             <div className="info-text">
-              <h3>Precise Location Tracking</h3>
-              <p>
-                Real-time alerts and precise location tracking offer unparalleled safety during critical moments of natural disasters.
-              </p>
+              <h3>Emergency Alerts for the Vulnerable</h3>
+              <p>Get real-time disaster alerts and phone assistance, tailored to the needs of vulnerable individuals, to stay safe during emergencies.</p>
               <button className="info-button" onClick={() => scrollToSection(contactSectionRef)}>Contact Us</button>
             </div>
           </div>
@@ -151,16 +200,16 @@ function MainPage() {
             </div>
             <div className="feature-card">
               <div className="feature-icon">❄️</div>
-              <h3>Live Tracking</h3>
+              <h3>AI Report</h3>
               <p>
-                Access expert advice on how to prepare for and respond to various natural disasters effectively.
+              Report emergencies on your behalf based on your personal situation.
               </p>
             </div>
             <div className="feature-card">
               <div className="feature-icon">❄️</div>
-              <h3>Safety Tips</h3>
+              <h3>Shelter Map</h3>
               <p>
-                Access expert advice on how to prepare for and respond to various natural disasters effectively.
+              Provides shelter information and guidance maps tailored to each type of natural disaster.
               </p>
             </div>
           </div>
@@ -169,96 +218,139 @@ function MainPage() {
 
       <section ref={contactSectionRef} className="contact-section">
         <div className="contact-container">
-          {/* 왼쪽 입력 폼 */}
+
+          {/* Left Input Form */}
           <div className="input-section">
-            <h1>Contact Us</h1>
+            <div className="contact-header">
+              <h1>Contact Us</h1>
+              <a href="mailto:your-email@example.com">Contact for bulk user support</a>
+            </div>
             <form className="contact-form" onSubmit={handleSubmit}>
-              {/* 전화번호 입력 */}
+
+              {/* Who you are (Dropdown) */}
               <div className="form-group">
-                <label htmlFor="phone">Phone Number</label>
-                <div className="phone-input">
-                  <select
-                    id="country-code"
-                    name="phone"
-                    value={formData.phone}
-                    onChange={handleChange}
-                  >
-                    <option value="+82">South Korea (+82)</option>
-                    <option value="+1">United States (+1)</option>
-                  </select>
-                  <input
-                    type="tel"
-                    id="phone"
-                    name="phone"
-                    placeholder="Enter your phone number"
-                    required
-                    onChange={handleChange}
-                  />
-                </div>
+                <label htmlFor="personType">Who are you?</label>
+                <select
+                  id="personType"
+                  name="personType"
+                  value={formData.personType}
+                  onChange={handleChange}
+                  required
+                >
+                  <option value="" disabled selected>Select your situation</option>
+                  <option value="elderly">Elderly / Living Alone / Pregnant / Guardian of Infant / Mobility Issues</option>
+                  <option value="visual">Visually Impaired</option>
+                  <option value="hearing">Hearing Impaired</option>
+                  <option value="foreigner">Foreigner / Refugee</option>
+                  <option value="other">Other</option>
+                </select>
               </div>
 
-              {/* 이메일 입력 */}
+              {/* Preferred Language */}
               <div className="form-group">
-                <label htmlFor="email">Email</label>
+                <label htmlFor="preferredLanguage">Preferred Language</label>
+                <select
+                  id="preferredLanguage"
+                  name="preferredLanguage"
+                  value={formData.preferredLanguage}
+                  onChange={handleChange}
+                  required
+                >
+                  <option value="" disabled selected>Select your language</option>
+                  <option value="en">English</option>
+                  <option value="ko">한국어</option>
+                  <option value="zh">中文</option>
+                  <option value="ja">日本語</option>
+                  <option value="hi">हिन्दी</option>
+                  <option value="other">Other / 기타</option>
+                </select>
+              </div>
+
+              {/* Address */}
+              <div className="form-group">
+                <label htmlFor="address">Address</label>
                 <input
-                  type="email"
-                  id="email"
-                  name="email"
-                  placeholder="Enter your email"
-                  value={formData.email}
+                  type="text"
+                  id="address"
+                  name="address"
+                  placeholder="Enter your full residential address"
+                  value={formData.address}
                   onChange={handleChange}
                   required
                 />
               </div>
 
-              {/* 장애 여부 선택 */}
+              {/* International Phone Number */}
               <div className="form-group">
-                <label htmlFor="disability">Disability Status</label>
-                <select
-                  id="disability"
-                  name="disability"
-                  value={formData.disability}
-                  onChange={handleChange}
-                >
-                  <option value="">Select an option</option>
-                  <option value="visual">Visual Impairment</option>
-                  <option value="hearing">Hearing Impairment</option>
-                  <option value="mobility">Mobility Difficulty</option>
-                </select>
-              </div>
-
-              {/* 집 주소 입력 */}
-              <div className="form-group">
-                <label htmlFor="address">Home Address</label>
-                <textarea
-                  id="address"
-                  name="address"
-                  rows="3"
-                  placeholder="Enter your full address"
-                  value={formData.address}
+                <label htmlFor="phone">Phone Number (International)</label>
+                <input
+                  type="tel"
+                  id="phone"
+                  name="phone"
+                  placeholder="e.g., +82 10-1234-5678"
+                  value={formData.phone}
                   onChange={handleChange}
                   required
-                ></textarea>
+                />
               </div>
 
-              {/* 제출 버튼 */}
+              {/* Guardian Connection */}
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    name="hasGuardian"
+                    checked={formData.hasGuardian}
+                    onChange={(e) => setFormData({ ...formData, hasGuardian: e.target.checked })}
+                  />
+                  &nbsp;I would like to connect a guardian
+                </label>
+                {formData.hasGuardian && (
+                  <input
+                    type="tel"
+                    name="guardianPhone"
+                    placeholder="Guardian's phone number (e.g., +82 10-0000-0000)"
+                    value={formData.guardianPhone}
+                    onChange={handleChange}
+                    className="guardian-phone"
+                  />
+                )}
+              </div>
+              
+              {/* Request Phone Guidance */}
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    name="needCall"
+                    checked={formData.needCall}
+                    onChange={(e) => setFormData({ ...formData, needCall: e.target.checked })}
+                  />
+                  &nbsp;I would like a guidance call from a support agent
+                </label>
+              </div>
+              
+              {/* Submit Button */}
               <button type="submit">Submit &gt;&gt;</button>
             </form>
           </div>
-
-          {/* 오른쪽 이미지 영역 */}
+              
+          {/* Right Image Section - Unchanged */}
           <div className="image-section">
             <img src={contact} alt="Contact Us" />
           </div>
+              
         </div>
       </section>
 
       <footer className="footer-section">
         <div className="footer-container">
+          {/* 왼쪽 영역 */}
           <div className="footer-left">
             <h3>Code Wave</h3>
           </div>
 
+          {/* 오른쪽 영역 */}
           <div className="footer-right">
             <ul>
               <li>
@@ -274,7 +366,7 @@ function MainPage() {
         </div>
       </footer>
 
-    </div>
+  </div>
   );
 }
 

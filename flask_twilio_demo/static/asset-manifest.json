@@ -1,0 +1,17 @@
+{
+  "files": {
+    "main.css": "/static/css/main.1cff3d52.css",
+    "main.js": "/static/js/main.3f735897.js",
+    "static/media/rain4.mp4": "/static/media/rain4.8ea326d42beb461a6db1.mp4",
+    "static/media/contactUs.jpg": "/static/media/contactUs.5c7aed64db2271f202f0.jpg",
+    "static/media/elderly3.jpg": "/static/media/elderly3.407e6c5e1247f55c0289.jpg",
+    "static/media/Fontspring-DEMO-allroundgothic-semi.otf": "/static/media/Fontspring-DEMO-allroundgothic-semi.f97ce53e10bcc14c6ba3.otf",
+    "index.html": "/index.html",
+    "main.1cff3d52.css.map": "/static/css/main.1cff3d52.css.map",
+    "main.3f735897.js.map": "/static/js/main.3f735897.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.1cff3d52.css",
+    "static/js/main.3f735897.js"
+  ]
+}

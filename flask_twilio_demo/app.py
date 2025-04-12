@@ -9,7 +9,7 @@ from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client
 from dotenv import load_dotenv
 import uvicorn
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict
 import pathlib
@@ -87,12 +87,25 @@ app.add_middleware(
     allow_headers=["*"], # Allow all headers
 )
 
-# Mount static files directory
-static_dir = pathlib.Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+# --- REVISED Static files mounting --- 
+# Serve files from the 'static' sub-directory within the main static folder
+root_static_dir = pathlib.Path(__file__).parent / "static"
+build_static_dir = root_static_dir / "static" # Path to the nested static dir (e.g., static/static)
+
+if build_static_dir.is_dir():
+    # Mount the nested static directory (containing CSS, JS) to /static URL path
+    app.mount("/static", StaticFiles(directory=build_static_dir), name="static_assets")
+    logging.info(f"Mounted static assets from: {build_static_dir} at /static")
+else:
+    logging.warning(f"Build output's static directory not found at: {build_static_dir}. Static assets might not load.")
+    # Fallback or alternative: Mount the root static dir if nested doesn't exist?
+    # app.mount("/static", StaticFiles(directory=root_static_dir), name="static_root_fallback")
 
 # Configure Jinja2 templates
-templates_dir = static_dir / "maps" # Templates are in static/maps
+# templates_dir = static_dir / "maps" # 경로 오류 수정: root_static_dir 사용
+templates_dir = root_static_dir / "maps"
+if not templates_dir.is_dir():
+     logging.warning(f"Jinja2 templates directory not found at {templates_dir}")
 templates = Jinja2Templates(directory=templates_dir)
 
 # Twilio credentials from .env file
@@ -126,12 +139,17 @@ else:
 
 # --- Pydantic Schemas ---
 class UserBase(BaseModel):
-    vulnerability_type: str
+    vulnerability_type: str = Field(..., alias='personType')
     address: Optional[str] = None
-    phone_number: str
-    has_guardian: bool = False
-    guardian_phone_number: Optional[str] = None
-    wants_info_call: bool = True
+    phone_number: str = Field(..., alias='phone')
+    has_guardian: bool = Field(False, alias='hasGuardian')
+    guardian_phone_number: Optional[str] = Field(None, alias='guardianPhone')
+    wants_info_call: bool = Field(True, alias='needCall')
+    preferred_language: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
+        from_attributes = True
 
 class UserCreate(UserBase):
     pass # Inherits all fields from UserBase
@@ -142,8 +160,10 @@ class UserResponse(UserBase):
     longitude: Optional[float] = None
     last_voice_response: Optional[str] = None # Add field to response
     last_response_timestamp: Optional[datetime] = None # Add field to response
+    # preferred_language is inherited from UserBase
 
     class Config:
+        populate_by_name = True
         from_attributes = True # Changed from orm_mode = True for Pydantic v2
 
 # New schema for detailed user response including last response
@@ -1071,29 +1091,23 @@ async def serve_map(request: Request, map_file_name: str):
     base_map_name = map_file_name.replace(".html", "")
     if base_map_name not in allowed_maps:
         raise HTTPException(status_code=404, detail="Map not found")
-
     template_name = f"{base_map_name}.html"
-
-    # --- DEBUGGING: Print the key value being used ---
-    print(f"DEBUG: Using KAKAO_MAP_APP_KEY: {kakao_map_app_key}")
-    # -------------------------------------------------
-
-    context = {
-        "request": request,
-        "kakao_map_app_key": kakao_map_app_key
-    }
+    context = {"request": request, "kakao_map_app_key": kakao_map_app_key}
     try:
         return templates.TemplateResponse(template_name, context)
     except Exception as e:
         print(f"Error rendering template {template_name}: {e}")
         raise HTTPException(status_code=404, detail="Map template not found or error rendering")
 
-@app.get("/", response_class=HTMLResponse, tags=["Serving"])
-async def serve_frontend_app():
-    index_path = static_dir / "app" / "index.html"
+# --- Frontend Serving (Catch-all for React Router) --- 
+@app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
+async def serve_react_app(request: Request, full_path: str):
+    index_path = root_static_dir / "index.html" # root_static_dir 사용 확인
     if not index_path.is_file():
-        return HTMLResponse(content="Frontend not built or index.html not found in static/app", status_code=404)
-    return HTMLResponse(content=index_path.read_text(), status_code=200)
+        logging.error(f"Frontend index.html not found at: {index_path}")
+        return HTMLResponse(content="Frontend not built or index.html not found.", status_code=503)
+    return HTMLResponse(content=index_path.read_text())
+# ----------------------------------------------------
 
 # --- Database and RAG Setup Function (called on startup) ---
 def setup_database_and_rag(app: FastAPI):
