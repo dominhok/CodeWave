@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emergency Evacuation Route</title>
+    <script src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=w5mst5owqn&submodules=geocoder&language=en"></script>
+    <script type="text/javascript" src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpClientId=w5mst5owqn&submodules=geocoder,directions"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        body {
+            background-color: #f8f9fa;
+            color: #343a40;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 20px;
+            background: rgba(0, 122, 255, 0.1);
+            border-radius: 12px;
+            border: 1px solid rgba(0, 122, 255, 0.2);
+        }
+
+        .header h1 {
+            font-size: 2.2em;
+            color: #007AFF;
+            margin-bottom: 10px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+            font-weight: 500;
+            margin-bottom: 0;
+            line-height: 1.4;
+        }
+
+        .header p strong {
+            color: #007AFF;
+            font-weight: 600;
+        }
+
+        .emergency-info {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 10px;
+            font-size: 1em;
+            color: #555;
+        }
+
+        .emergency-info span {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        #map {
+            width: 100%;
+            height: 500px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e9ecef;
+        }
+
+        .info-window {
+            padding: 10px 16px;
+            font-size: 15px;
+            color: #343a40;
+            background: white;
+            border-radius: 8px;
+            font-weight: 600;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e9ecef;
+        }
+
+        #goBtn {
+            display: none;
+            width: 100%;
+            padding: 18px 20px;
+            font-size: 1.3em;
+            color: white;
+            background-color: #007AFF;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            text-decoration: none;
+            text-align: center;
+            transition: all 0.3s;
+            margin-top: 20px;
+            box-shadow: 0 4px 10px rgba(0, 122, 255, 0.2);
+            font-weight: 700;
+        }
+
+        #goBtn:hover {
+            background-color: #0056b3;
+            transform: translateY(-2px);
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 18px;
+            background: white;
+            border-radius: 8px;
+            font-size: 1.1em;
+            color: #666;
+            border: 1px solid #e9ecef;
+            font-weight: 500;
+        }
+
+        .emergency-alert {
+            background: #007AFF;
+            color: white;
+            padding: 14px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 1.1em;
+            box-shadow: 0 4px 10px rgba(0, 122, 255, 0.2);
+            letter-spacing: -0.3px;
+        }
+
+        .emergency-alert span {
+            margin-right: 12px;
+            font-size: 1.2em;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
+        }
+
+        #goBtn {
+            animation: pulse 2s infinite;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            .header h1 {
+                font-size: 2em;
+            }
+            #map {
+                height: 50vh;
+            }
+            #goBtn {
+                font-size: 1.2em;
+                padding: 16px 20px;
+            }
+            .emergency-alert {
+                font-size: 1em;
+                padding: 14px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚨 Emergency Evacuation Route</h1>
+            <p>A <strong id="disaster-type">earthquake</strong> has occurred in <strong id="disaster-location">Gangnam-gu, Seoul</strong>.<br></p>
+            <div class="emergency-info">
+                <span>🕒 <span id="current-time">--:--</span></span>
+                <span>📍 Distance from current location: <span id="disaster-distance">3.7km</span></span>
+            </div>
+        </div>
+        <div class="emergency-alert">
+            <span>⚡ Guiding you to the nearest safe shelter from your current location</span>
+        </div>
+        <div id="map"></div>
+        <a id="goBtn" href="#" target="_blank">
+            🚶‍♂️ Shelter Route Navigation
+        </a>
+        <div class="status">
+            ✨ Emergency Call button
+        </div>
+    </div>
+
+    <script>
+        // API로부터 받아올 재난 정보 (임시 데이터)
+        const getDisasterInfo = async () => {
+            // TODO: 실제 재난문자 API 연동 시 이 부분을 API 호출로 대체
+            return {
+                location: 'Seongdong-gu, Seoul',
+                type: 'earthquake',
+                scale: 'Magnitude 3.5',
+                time: '14:23',
+                coordinates: {
+                    lat: 37.563456,  // 성동구 행당동 부근
+                    lng: 127.036372
+                },
+                radius: 5000  // 위험 반경 (미터)
+            };
+        };
+
+        // API로부터 받아올 대피소 정보 (임시 데이터)
+        const getShelterInfo = async () => {
+            // TODO: 실제 재난대피소 API 연동 시 이 부분을 API 호출로 대체
+            return {
+                id: "S001",
+                name: "Seongdong District Office",
+                type: "Emergency Shelter",
+                address: "39 Wangsan-ro, Seongdong-gu, Seoul",
+                lat: 37.563456,  // 성동구청 좌표
+                lng: 127.036992
+            };
+        };
+
+        // 시간 업데이트 함수
+        function updateCurrentTime() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('current-time').textContent = `${hours}:${minutes}`;
+        }
+        
+        updateCurrentTime();
+        setInterval(updateCurrentTime, 60000);
+
+        // 거리 계산 함수 (Haversine formula)
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        // 위치 정보 가져오기
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(async function(position) {
+                try {
+                    // 1. 현재 위치 정보
+                    const currentLocation = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    };
+                    console.log('Current Location:', currentLocation);
+
+                    // 2. API에서 재난 정보 가져오기
+                    const disasterInfo = await getDisasterInfo();
+                    console.log('Disaster Info:', disasterInfo);
+                    
+                    // 3. API에서 가장 가까운 대피소 정보 가져오기
+                    const shelterInfo = await getShelterInfo();
+                    console.log('Shelter Info:', shelterInfo);
+
+                    // 4. 지도 초기화
+                    const map = new naver.maps.Map('map', {
+                        center: new naver.maps.LatLng(currentLocation.lat, currentLocation.lng),
+                        zoom: 13,
+                        scaleControl: true,
+                        mapDataControl: true,
+                        zoomControl: true,
+                        mapTypeControl: true,
+                        language: 'en'
+                    });
+
+                    // 5. 현재 위치 마커
+                    const currentMarker = new naver.maps.Marker({
+                        position: new naver.maps.LatLng(currentLocation.lat, currentLocation.lng),
+                        map: map,
+                        icon: {
+                            content: `
+                                <div style="position:relative;cursor:pointer;" class="marker-container">
+                                    <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);">
+                                        <div style="position:relative;width:24px;height:24px;">
+                                            <div style="position:absolute;top:-36px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-top:16px solid #007AFF;"></div>
+                                            <div style="position:absolute;top:-40px;left:50%;transform:translateX(-50%);width:12px;height:12px;background:#007AFF;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);"></div>
+                                        </div>
+                                    </div>
+                                    <div class="info-window" style="background:white;border:2px solid #007AFF;color:#007AFF;position:absolute;white-space:nowrap;top:-80px;left:50%;transform:translateX(-50%);box-shadow:0 2px 6px rgba(0,0,0,0.2);padding:8px 12px;border-radius:6px;z-index:1;">
+                                        📍 Current Location
+                                    </div>
+                                </div>
+                            `
+                        },
+                        zIndex: 100
+                    });
+
+                    // 6. 재난 발생 지점 마커
+                    const disasterMarker = new naver.maps.Marker({
+                        position: new naver.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng),
+                        map: map,
+                        icon: {
+                            content: `
+                                <div style="position:relative;cursor:pointer;" class="marker-container">
+                                    <div class="info-window" style="background:white;border:2px solid #FF3B30;color:#FF3B30;position:relative;box-shadow:0 2px 6px rgba(0,0,0,0.2);padding:8px 12px;border-radius:6px;z-index:1;">
+                                        <div style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:10px solid #FF3B30;"></div>
+                                        ⚠️ Disaster Point
+                                    </div>
+                                </div>
+                            `
+                        },
+                        zIndex: 99
+                    });
+
+                    // 7. 대피소 마커
+                    const shelterMarker = new naver.maps.Marker({
+                        position: new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng),
+                        map: map,
+                        icon: {
+                            content: `
+                                <div style="position:relative;cursor:pointer;" class="marker-container">
+                                    <div class="info-window" style="background:white;border:2px solid #34C759;color:#34C759;position:relative;box-shadow:0 2px 6px rgba(0,0,0,0.2);padding:8px 12px;border-radius:6px;z-index:1;">
+                                        <div style="position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:10px solid #34C759;"></div>
+                                        🏥 ${shelterInfo.name}
+                                    </div>
+                                </div>
+                            `
+                        },
+                        zIndex: 98
+                    });
+
+                    // 마커 클릭 이벤트 핸들러
+                    [currentMarker, disasterMarker, shelterMarker].forEach(marker => {
+                        naver.maps.Event.addListener(marker, 'click', function() {
+                            // 클릭된 마커를 최상단으로 올림
+                            currentMarker.setZIndex(98);
+                            disasterMarker.setZIndex(98);
+                            shelterMarker.setZIndex(98);
+                            marker.setZIndex(101);
+                        });
+                    });
+
+                    // 8. 위험 반경 표시
+                    new naver.maps.Circle({
+                        map: map,
+                        center: new naver.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng),
+                        radius: disasterInfo.radius,
+                        strokeWeight: 1,
+                        strokeColor: '#FF3B30',
+                        strokeOpacity: 0.7,
+                        strokeStyle: 'solid',
+                        fillColor: '#FF3B30',
+                        fillOpacity: 0.15
+                    });
+
+                    // 9. 지도 영역 설정
+                    const bounds = new naver.maps.LatLngBounds();
+                    bounds.extend(new naver.maps.LatLng(currentLocation.lat, currentLocation.lng));
+                    bounds.extend(new naver.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng));
+                    bounds.extend(new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng));
+                    map.fitBounds(bounds, {
+                        top: 100,
+                        right: 100,
+                        bottom: 100,
+                        left: 100
+                    });
+
+                    // 좌표를 주소로 변환하는 함수
+                    async function coordToAddress(lat, lng) {
+                        const naver = window.naver;
+                        return new Promise((resolve, reject) => {
+                            naver.maps.Service.reverseGeocode({
+                                coords: new naver.maps.LatLng(lat, lng),
+                                orders: [
+                                    naver.maps.Service.OrderType.ADDR,
+                                    naver.maps.Service.OrderType.ROAD_ADDR
+                                ].join(',')
+                            }, function(status, response) {
+                                if (status === naver.maps.Service.Status.ERROR) {
+                                    reject('주소 변환 실패');
+                                    return;
+                                }
+                                if (response.v2.address) {
+                                    resolve(response.v2.address);
+                                } else {
+                                    reject('주소를 찾을 수 없습니다');
+                                }
+                            });
+                        });
+                    }
+
+                    // REST API로 경로 데이터 가져오기
+                    async function getRouteData(start, goal) {
+                        const url = 'https://maps.apigw.ntruss.com/map-direction/v1/driving';
+                        const headers = {
+                            'X-NCP-APIGW-API-KEY-ID': 'w5mst5owqn',
+                            'X-NCP-APIGW-API-KEY': '155LxzbIokq7RvfMnBDdFNyeNS01gspCgCUyn1bz'
+                        };
+                        
+                        try {
+                            const response = await fetch(`${url}?start=${start.lng},${start.lat}&goal=${goal.lng},${goal.lat}&option=trafast`, {
+                                method: 'GET',
+                                headers: headers
+                            });
+                            
+                            if (!response.ok) {
+                                const errorData = await response.json();
+                                console.error('Direction API Error Response:', errorData);
+                                throw new Error(`Direction API request failed: ${response.status}`);
+                            }
+                            
+                            const data = await response.json();
+                            console.log('Route Data:', data);
+                            
+                            if (!data.route || !data.route.trafast || !data.route.trafast[0]) {
+                                throw new Error('Invalid route data structure');
+                            }
+                            
+                            return data;
+                        } catch (error) {
+                            console.error('Direction API Error:', error);
+                            throw error;
+                        }
+                    }
+
+                    // 경로를 지도에 그리기
+                    function drawRoute(map, path) {
+                        return new naver.maps.Polyline({
+                            map: map,
+                            path: path,
+                            strokeColor: '#5347AA',
+                            strokeWeight: 5,
+                            strokeOpacity: 0.8,
+                            strokeStyle: 'solid'
+                        });
+                    }
+
+                    let currentPath = null;
+
+                    // 네비게이션 버튼 설정
+                    const goBtn = document.getElementById('goBtn');
+                    
+                    goBtn.onclick = async function(e) {
+                        e.preventDefault();
+                        try {
+                            // 이전 경로가 있다면 삭제
+                            if (currentPath) {
+                                currentPath.setMap(null);
+                            }
+
+                            // REST API로 경로 데이터 가져오기
+                            const routeData = await getRouteData(
+                                { lat: currentLocation.lat, lng: currentLocation.lng },
+                                { lat: shelterInfo.lat, lng: shelterInfo.lng }
+                            );
+                            
+                            if (routeData && routeData.route && routeData.route.trafast && routeData.route.trafast[0] && routeData.route.trafast[0].path) {
+                                // 경로 좌표 변환
+                                const pathCoords = routeData.route.trafast[0].path;
+                                const path = [];
+                                
+                                // 좌표 배열을 LatLng 객체로 변환
+                                for (let i = 0; i < pathCoords.length; i++) {
+                                    path.push(new naver.maps.LatLng(pathCoords[i][1], pathCoords[i][0]));
+                                }
+                                
+                                // 경로 그리기
+                                currentPath = drawRoute(map, path);
+                                
+                                // 경로가 모두 보이도록 지도 영역 조정
+                                const bounds = new naver.maps.LatLngBounds();
+                                path.forEach(coord => bounds.extend(coord));
+                                map.fitBounds(bounds);
+
+                                console.log('Route drawn successfully');
+                            } else {
+                                throw new Error('Invalid route data format');
+                            }
+                        } catch (error) {
+                            console.error('Navigation Error:', error);
+                            alert('경로를 가져오는데 실패했습니다. 잠시 후 다시 시도해주세요.');
+                        }
+                    };
+                    goBtn.style.display = 'block';
+
+                    // 11. 3초 후 대피소 방향으로 지도 전환
+                    setTimeout(() => {
+                        const centerLat = (currentLocation.lat + shelterInfo.lat) / 2;
+                        const centerLng = (currentLocation.lng + shelterInfo.lng) / 2;
+                        
+                        map.morph(new naver.maps.LatLng(centerLat, centerLng), 15, {
+                            duration: 2000,
+                            easing: 'easeOutCubic'
+                        });
+
+                        document.querySelector('.status').textContent = 
+                            '✨ Please check the safe route to the nearest shelter.';
+                    }, 3000);
+
+                    // 12. 거리 정보 업데이트
+                    const distanceToDisaster = calculateDistance(
+                        currentLocation.lat,
+                        currentLocation.lng,
+                        disasterInfo.coordinates.lat,
+                        disasterInfo.coordinates.lng
+                    ).toFixed(1);
+                    
+                    document.getElementById('disaster-distance').textContent = `${distanceToDisaster}km`;
+                    document.getElementById('disaster-location').textContent = disasterInfo.location;
+                    document.getElementById('disaster-type').textContent = disasterInfo.type;
+
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Error loading disaster or shelter information.');
+                }
+            }, function(error) {
+                alert('Cannot get your location. Please check your location permission settings.');
+            });
+        } else {
+            alert('Geolocation is not supported by this browser.');
+        }
+    </script>
+</body>
+</html> 
