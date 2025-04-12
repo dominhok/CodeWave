@@ -53,7 +53,7 @@ yarn-error.log*
 
 # Frontend Build output
 /frontend/build/
-/flask_twilio_demo/static/app/
+# /flask_twilio_demo/static/app/
 
 # Database files
 *.db

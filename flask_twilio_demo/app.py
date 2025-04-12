@@ -18,6 +18,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import logging
 import time # time 모듈 임포트
+import urllib.parse # URL 인코딩을 위해 임포트
 
 from . import models
 from .models import Base, engine, User, get_db
@@ -34,7 +35,14 @@ from langchain_community.document_loaders import DirectoryLoader # Using communi
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-load_dotenv() # Load environment variables from .env file
+# --- Explicitly load .env from the SAME directory as app.py --- 
+current_dir = pathlib.Path(__file__).parent
+dotenv_path = current_dir / '.env' # Corrected path calculation
+logging.info(f"Attempting to load environment variables from: {dotenv_path}")
+# Make sure python-dotenv is installed: pip install python-dotenv
+load_success = load_dotenv(dotenv_path=dotenv_path, override=True) # Use override=True just in case
+logging.info(f".env file load success: {load_success} (Path Exists: {dotenv_path.exists()})") # Add existence check
+# --------------------------------------------------------------
 
 app = FastAPI()
 
@@ -120,6 +128,7 @@ class UserBase(BaseModel):
     has_guardian: bool = False
     guardian_phone_number: Optional[str] = None
     wants_info_call: bool = True
+    is_visually_impaired: bool = False
 
 class UserCreate(UserBase):
     pass # Inherits all fields from UserBase
@@ -181,11 +190,24 @@ def filter_target_users(disaster_alert: DisasterAlertData, db: Session) -> List[
     if target_location_keyword:
         print(f"Filtering users in location containing: '{target_location_keyword}'")
         try:
-            filtered_users = db.query(User).filter(User.address.contains(target_location_keyword)).all()
-            print(f"Found {len(filtered_users)} users to notify.")
+            # Select only necessary columns explicitly to avoid schema mismatch errors
+            query_result = db.query(
+                User.id, 
+                User.phone_number, 
+                User.wants_info_call, 
+                User.address # Keep address if needed elsewhere, or remove
+                # We don't strictly NEED is_visually_impaired for the current logic flow after this point
+            ).filter(User.address.contains(target_location_keyword)).all()
+            
+            # Reconstruct User objects (or adapt downstream code to use tuples)
+            # For simplicity, let's reconstruct partial User objects needed for separation
+            filtered_users = [
+                User(id=row.id, phone_number=row.phone_number, wants_info_call=row.wants_info_call, address=row.address) 
+                for row in query_result
+            ]
+            print(f"Found {len(filtered_users)} users to notify (selected specific columns).")
         except Exception as e:
             print(f"Error filtering users: {e}")
-            # Return empty list on error or handle differently
             return [] 
     else:
         print("No location keyword to filter by from RCPTN_RGN_NM.")
@@ -298,6 +320,117 @@ def generate_notification_messages(disaster_alert: DisasterAlertData, users: Lis
         
     return notifications
 
+# --- RAG Based VOICE Message Generation (ENGLISH) ---
+def generate_voice_alert_message(disaster_alert: DisasterAlertData) -> str:
+    """
+    Generates an English voice alert message using RAG, suitable for TTS delivery.
+    Includes disaster info, key actions, and prompts for user response ('Report').
+    """
+    # Base alert info in English
+    base_alert_info = f"{disaster_alert.DST_SE_NM} in {disaster_alert.RCPTN_RGN_NM}"
+    print(f"Base Alert Info for VOICE RAG query: {base_alert_info}")
+
+    # Target length for the main RAG content (excluding the final prompt)
+    target_rag_len = 150 
+    total_max_len = 200 
+    # Fixed ENGLISH prompt to ask the user to say 'Report'
+    report_prompt_text = " If you need to report something, please say 'Report'." 
+
+    voice_message_content = ""
+
+    if vectorstore is None:
+        print("  WARNING: Vectorstore not available for VOICE RAG. Using fallback.")
+        # English Fallback
+        fallback_base = f"Emergency alert regarding {base_alert_info}. Please follow guidance from local authorities."
+        if len(fallback_base) > (total_max_len - len(report_prompt_text)):
+            # Truncate base if too long, keeping space for prompt
+            fallback_base = fallback_base[:(total_max_len - len(report_prompt_text) - 3)] + "..."
+        voice_message_content = fallback_base + report_prompt_text
+        return voice_message_content
+
+    try:
+        upstage_api_key = os.getenv("UPSTAGE_API_KEY")
+        if not upstage_api_key:
+             raise ValueError("UPSTAGE_API_KEY not found.")
+             
+        llm = ChatUpstage(api_key=upstage_api_key, model="solar-pro")
+        retriever = vectorstore.as_retriever()
+
+        # --- Voice-Optimized English Prompt (Remains the same) ---
+        prompt_template = f"""
+        Generate a clear and concise emergency alert message in ENGLISH, suitable for voice delivery (Text-to-Speech). 
+        Aim for approximately {target_rag_len} characters for this main alert portion.
+
+        Include:
+        1. Disaster Type and Location: [from {{question}}]
+        2. 1-2 CRITICAL immediate actions based on the context documents. Be direct.
+
+        Context Documents (for action guidance):
+        {{context}}
+
+        Output ONLY the core alert message text. Do NOT include any introductory phrases like "Here is the alert".
+        Example: "ALERT: Heavy rain advisory for Seoul Gangnam-gu. Avoid low-lying areas. Monitor updates closely."
+
+        Core Alert Message (target ~{target_rag_len} chars):
+        """
+        PROMPT = PromptTemplate(
+            template=prompt_template, input_variables=["context", "question"]
+        )
+
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=retriever,
+            chain_type_kwargs={"prompt": PROMPT},
+            return_source_documents=False
+        )
+        
+        query = base_alert_info
+        print(f"  Voice RAG Query: {query}")
+        
+        result = qa_chain.invoke({"query": query})
+        rag_summary_text = result.get('result', '').strip()
+        
+        print(f"  Voice RAG Generated Response (raw core text):\n{rag_summary_text}")
+
+        # --- Assemble Final Voice Message (with English prompt) ---
+        if not rag_summary_text:
+            print("  WARNING: Voice RAG generation resulted in empty string. Using fallback.")
+            # English Fallback
+            fallback_base = f"ALERT: {base_alert_info}. Check official sources for guidance."
+            if len(fallback_base) > (total_max_len - len(report_prompt_text)):
+                 fallback_base = fallback_base[:(total_max_len - len(report_prompt_text) - 3)] + "..."
+            voice_message_content = fallback_base + report_prompt_text
+        else:
+            # Truncate the RAG part if it exceeds its target length
+            if len(rag_summary_text) > target_rag_len:
+                print(f"  WARNING: Voice RAG core text exceeded target {target_rag_len} chars ({len(rag_summary_text)}). Hard truncating.")
+                rag_summary_text = rag_summary_text[:target_rag_len] 
+            
+            # Combine core message and the fixed English reporting prompt
+            voice_message_content = rag_summary_text + report_prompt_text
+            
+            # Final check on total length
+            if len(voice_message_content) > total_max_len:
+                 print(f"  WARNING: Final VOICE message still exceeds {total_max_len} chars ({len(voice_message_content)}). Force truncating final.")
+                 voice_message_content = voice_message_content[:total_max_len]
+
+    except Exception as e:
+        print(f"  ERROR during Voice RAG generation: {e}")
+        # English Fallback on error
+        fallback_base = f"ALERT: {base_alert_info}. Error retrieving details. Follow local guidance."
+        if len(fallback_base) > (total_max_len - len(report_prompt_text)):
+             fallback_base = fallback_base[:(total_max_len - len(report_prompt_text) - 3)] + "..."
+        voice_message_content = fallback_base + report_prompt_text
+
+    # Log the final generated message content and its length
+    logging.info(f"Final generated ENGLISH VOICE message content:\n{voice_message_content}")
+    logging.info(f"---> Final VOICE message length: {len(voice_message_content)} chars")
+    
+    return voice_message_content
+
+# --- Function to send Twilio SMS (Map URL first, then alert with delay) --- 
+# Revert signature, use hardcoded base_url inside
 def send_twilio_notifications(notifications_to_send: List[dict]) -> dict:
     """Sends notifications via Twilio SMS (map URL first, then alert with delay) and returns counts."""
     successful_notifications = 0
@@ -309,21 +442,21 @@ def send_twilio_notifications(notifications_to_send: List[dict]) -> dict:
         logging.error("Twilio client not configured. Cannot send SMS.") 
         return {"success": successful_notifications, "failed": len(notifications_to_send)} 
 
-    # Construct the map URL message (needs base_url)
-    # TODO: Get base URL from environment variable or config for flexibility
-    base_url = "https://ff74-121-160-208-235.ngrok-free.app" 
-    full_map_url = f"{base_url}/map/map_api"
-    map_message_body = f"Nearby shelters/safety info: {full_map_url}" # Slightly shortened prefix
+    # --- HARDCODED base_url --- 
+    hardcoded_base_url = "https://5eaf-121-160-208-235.ngrok-free.app"
+    # --------------------------
+    full_map_url = f"{hardcoded_base_url}/map/map_api"
+    map_message_body = f"Nearby shelters/safety info: {full_map_url}" 
 
-    print("--- SENDING REAL TWILIO NOTIFICATIONS (2-Step: Map URL + Alert) --- ")
-    logging.info("--- Starting to send real Twilio notifications (Map URL + Alert) ---") 
+    print(f"--- SENDING REAL TWILIO NOTIFICATIONS (2-Step: Map URL: {full_map_url} + Alert) --- ")
+    logging.info(f"--- Starting to send real Twilio notifications (Map URL + Alert) using hardcoded base URL: {hardcoded_base_url} ---") 
     for item in notifications_to_send:
         user = item["user"]
-        alert_message_body = item["message"] # This is the shorter alert message generated by RAG
+        alert_message_body = item["message"]
         
         try:
             # 1. Send the MAP URL SMS first
-            logging.info(f"  1 -> Attempting to send MAP URL SMS to {user.phone_number} (User ID: {user.id})")
+            logging.info(f"  1 -> Attempting to send MAP URL SMS ({map_message_body}) to {user.phone_number} (User ID: {user.id})")
             message1 = client.messages.create(
                 body=map_message_body,
                 from_=twilio_phone_number,
@@ -334,7 +467,7 @@ def send_twilio_notifications(notifications_to_send: List[dict]) -> dict:
             # 2. If map URL SMS was successful, wait briefly and send the main alert message
             try:
                 logging.info(f"  ... Waiting 0.5 seconds before sending alert SMS ...")
-                time.sleep(0.5) # 0.5초 지연 추가
+                time.sleep(0.5)
                 
                 logging.info(f"  2 -> Attempting to send ALERT SMS to {user.phone_number} (User ID: {user.id}). Content:\n{alert_message_body}")
                 message2 = client.messages.create(
@@ -343,19 +476,81 @@ def send_twilio_notifications(notifications_to_send: List[dict]) -> dict:
                     to=user.phone_number
                 )
                 logging.info(f"    Alert SMS sent successfully! SID: {message2.sid} to {user.phone_number}")
-                successful_notifications += 1 # Count success only if both messages are sent
+                successful_notifications += 1
                 
             except Exception as e2:
                 logging.error(f"    ERROR sending ALERT SMS to {user.phone_number} after successful map URL: {e2}", exc_info=True) 
-                failed_notifications += 1 # Map URL sent, but alert failed
+                failed_notifications += 1
 
         except Exception as e1:
-            # This now represents failure sending the MAP URL
             logging.error(f"    ERROR sending MAP URL SMS to {user.phone_number}: {e1}", exc_info=True) 
-            failed_notifications += 1 # Map URL failed, didn't attempt alert
+            failed_notifications += 1
             
     logging.info(f"--- Notification sending complete (Success pairs: {successful_notifications}, Failed attempts: {failed_notifications}) ---")
     return {"success": successful_notifications, "failed": failed_notifications}
+
+# --- Function to send Twilio VOICE alerts (ENGLISH) --- 
+# Revert signature, use hardcoded base_url inside
+def send_twilio_voice_alerts(notifications_to_send: List[dict]) -> dict:
+    """Sends English voice alerts via Twilio Call API using generated TwiML, passing alert context."""
+    successful_calls = 0
+    failed_calls = 0
+    
+    if not client or not twilio_phone_number:
+        print("  ERROR: Twilio client not configured. Cannot make calls.")
+        logging.error("Twilio client not configured for making calls.") 
+        return {"success": successful_calls, "failed": len(notifications_to_send)}
+
+    # --- HARDCODED base_url --- 
+    hardcoded_base_url = "https://5eaf-121-160-208-235.ngrok-free.app"
+    # --------------------------
+
+    print(f"--- SENDING ENGLISH VOICE CALL ALERTS using hardcoded base URL: {hardcoded_base_url} --- ")
+    logging.info(f"--- Starting to send {len(notifications_to_send)} English voice call alerts ---") 
+    for item in notifications_to_send:
+        user = item["user"]
+        message_text = item["message_text"] 
+        
+        encoded_message = urllib.parse.quote(message_text)
+        # Construct full action URL using the hardcoded base_url
+        action_url = f'{hardcoded_base_url}/twilio/handle-voice-alert-response?alert_message={encoded_message}'
+        
+        try:
+            # Construct TwiML dynamically for English
+            response = VoiceResponse()
+            gather = Gather(input='speech', 
+                            action=action_url, # Use the FULL action URL constructed with hardcoded base
+                            method='POST', 
+                            language='en-US', 
+                            speechTimeout='auto',
+                            actionOnEmptyResult=True,
+                            hints="report")
+            gather.say(message_text, voice='Polly.Joanna', language="en-US")
+            response.append(gather)
+            
+            response.say("Processing your response or ending call if none given.", voice='Polly.Joanna', language="en-US")
+            response.hangup()
+            
+            twiml_content = str(response)
+            
+            logging.info(f"  -> Attempting call to {user.phone_number} (User ID: {user.id}) Action URL: {action_url}")
+
+            call = client.calls.create(
+                twiml=twiml_content,
+                to=user.phone_number,
+                from_=twilio_phone_number
+            )
+            logging.info(f"    English Voice call initiated successfully! SID: {call.sid} to {user.phone_number}")
+            successful_calls += 1
+            
+            time.sleep(0.2)
+
+        except Exception as e:
+            logging.error(f"    ERROR initiating English voice call to {user.phone_number}: {e}", exc_info=True) 
+            failed_calls += 1
+            
+    logging.info(f"--- English Voice call initiation complete (Success: {successful_calls}, Failed: {failed_calls}) ---")
+    return {"success": successful_calls, "failed": failed_calls}
 
 # --- FastAPI Endpoints ---
 
@@ -412,7 +607,7 @@ async def make_call(call_request: CallRequest):
         raise HTTPException(status_code=500, detail="Twilio client not configured")
     try:
         call = client.calls.create(
-                            twiml=f'<Response><Say language="ko-KR">{call_request.message}</Say></Response>',
+                            twiml=f'<Response><Say language="en-EN">{call_request.message}</Say></Response>',
                             to=call_request.to,
                             from_=twilio_phone_number
                         )
@@ -461,23 +656,68 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
     print("\n--- STARTING DISASTER SIMULATION (Refactored) ---")
     print(f"Received Alert SN: {disaster_alert.SN} for Region: {disaster_alert.RCPTN_RGN_NM}")
     
-    # 1. Filter users
+    # 1. Filter users based on location
     users_to_notify = filter_target_users(disaster_alert, db)
     
-    # 2. Generate messages
-    notifications = generate_notification_messages(disaster_alert, users_to_notify)
+    # --- Separate users by notification type (Based on wants_info_call only) --- 
+    sms_users = []
+    voice_users = []
+    print("Separating users based on wants_info_call preference:")
+    for user in users_to_notify:
+        # Voice call if user wants the call
+        if user.wants_info_call:
+            voice_users.append(user)
+            print(f"  - User {user.id} ({user.phone_number}): Wants info call -> VOICE")
+        # Otherwise, send SMS
+        else:
+            sms_users.append(user)
+            print(f"  - User {user.id} ({user.phone_number}): Does NOT want info call -> SMS")
+                
+    print(f"Separation complete: {len(sms_users)} for SMS, {len(voice_users)} for Voice Call")
+    # ----------------------------------------------------------------------------
     
-    # 3. Send notifications
-    send_results = send_twilio_notifications(notifications)
+    # 2. Generate messages (adapt for SMS/Voice)
+    # Generate SMS messages for users who don't want calls
+    sms_notifications = []
+    if sms_users:
+        print("Generating SMS messages...")
+        sms_notifications = generate_notification_messages(disaster_alert, sms_users)
+        
+    # Generate Voice messages for users who want calls
+    voice_notifications = [] # This will store user and the voice message text
+    if voice_users:
+        print("Generating Voice messages...")
+        # Generate the voice message text once for the disaster alert
+        voice_alert_text = generate_voice_alert_message(disaster_alert) 
+        # Assign the same message text to all voice users for this alert
+        voice_notifications = [{"user": user, "message_text": voice_alert_text} for user in voice_users]
+        # logging.warning("Voice message generation not yet implemented.") # Placeholder Removed
+
+    # 3. Send notifications (adapt for SMS/Voice)
+    sms_send_results = {"success": 0, "failed": 0}
+    if sms_notifications:
+        print("Sending SMS notifications...")
+        sms_send_results = send_twilio_notifications(sms_notifications)
+
+    voice_send_results = {"success": 0, "failed": 0}
+    if voice_notifications: # This check will now pass if there are voice users
+        print("Sending Voice call notifications...")
+        # Call the newly implemented function
+        voice_send_results = send_twilio_voice_alerts(voice_notifications)
+        # logging.warning("Voice call sending not yet implemented.") # Placeholder Removed
     
     print("--- SIMULATION PROCESSING COMPLETE ---")
 
     return {
-        "status": "Disaster simulation processed (Refactored, Twilio SMS Attempted)", 
+        "status": "Disaster simulation processed", 
         "received_data": disaster_alert,
-        "filtered_user_count": len(users_to_notify),
-        "successful_notifications": send_results["success"],
-        "failed_notifications": send_results["failed"]
+        "total_filtered_user_count": len(users_to_notify),
+        "sms_user_count": len(sms_users),
+        "voice_user_count": len(voice_users),
+        "successful_sms_notifications": sms_send_results["success"],
+        "failed_sms_notifications": sms_send_results["failed"],
+        "successful_voice_calls": voice_send_results["success"],
+        "failed_voice_calls": voice_send_results["failed"]
     }
 
 app.include_router(api_router)
@@ -519,6 +759,87 @@ async def handle_gather(request: Request, db: Session = Depends(get_db)):
         resp.say("죄송합니다, 이해하지 못했습니다. 다시 시도해주세요.", voice='Polly.Seoyeon')
         resp.redirect('/twilio/voice')
     return Response(content=str(resp), media_type="application/xml")
+
+# --- Webhook Endpoint for Voice Alert Response (ENGLISH) --- 
+@twilio_router.post("/handle-voice-alert-response", tags=["Twilio Webhooks"])
+# Revert signature to only take request, parse query param manually
+async def handle_voice_alert_response(request: Request):
+    """Handles the user's English speech input, including the original alert message context."""
+    # Log entry immediately
+    logging.info(f"--- Entered /handle-voice-alert-response (Manual Query Param Parsing) --- ") 
+    logging.info(f"Request URL: {request.url}")
+    
+    resp = VoiceResponse()
+    form = None
+    speech_result = "(SpeechResult not found or error)"
+    speech_confidence = "(Confidence not found)"
+    caller_phone_number = "(From not found)"
+    call_sid = "(CallSid not found)"
+    original_alert = "(Original alert message not available)"
+    alert_message_raw = "(Query param not found)"
+
+    # Manually extract query parameter
+    try:
+        alert_message_raw = request.query_params.get('alert_message')
+        logging.info(f"Manually extracted alert_message query param (raw): {alert_message_raw}")
+    except Exception as e:
+        logging.error(f"Error extracting query parameters: {e}", exc_info=True)
+        # Continue processing if possible, alert context might be missing
+    
+    try:
+        logging.info("Attempting to read form data from request...")
+        form = await request.form()
+        logging.info(f"Raw Form data received: {form}")
+        
+        speech_result = form.get('SpeechResult', '').strip().lower() 
+        speech_confidence = form.get('Confidence', 'N/A')
+        logging.info(f"*** Initial Speech Result Extracted: '{speech_result}' (Confidence: {speech_confidence}) ***")
+
+        caller_phone_number = form.get('From')
+        call_sid = form.get('CallSid')
+        logging.info(f"Extracted Form Data - From: {caller_phone_number}, CallSid: {call_sid}")
+
+    except Exception as e:
+        logging.error(f"Error reading form data: {e}", exc_info=True)
+        resp.say("An error occurred processing your response.", voice='Polly.Joanna', language="en-US")
+        resp.hangup()
+        return Response(content=str(resp), media_type="application/xml")
+    
+    # Decode the alert message if it was found
+    if alert_message_raw and alert_message_raw != "(Query param not found)":
+        try:
+            original_alert = urllib.parse.unquote(alert_message_raw)
+            logging.info(f"Successfully decoded alert_message: {original_alert}")
+        except Exception as e:
+            logging.warning(f"Could not decode alert_message parameter: {e}")
+            original_alert = "(Error decoding alert message)"
+    else:
+        logging.info("alert_message query parameter was not found or empty.")
+            
+    logging.info(f"--- Processing voice response --- ")
+    logging.info(f"  Caller: {caller_phone_number}")
+    logging.info(f"  Call SID: {call_sid}")
+    logging.info(f"  Speech Result (before check): '{speech_result}' (Confidence: {speech_confidence})") 
+    logging.info(f"  Original Alert Context: {original_alert}")
+    
+    # Check if the user said 'report' (case-insensitive)
+    logging.info(f"Checking for 'report' keyword in speech: '{speech_result}'")
+    if 'report' in speech_result:
+        logging.info(f"--> 'report' DETECTED for {caller_phone_number}.")
+        resp.say("Report request acknowledged. Ending call.", voice='Polly.Joanna', language="en-US")
+        logging.info(f"ACTION NEEDED: User {caller_phone_number} requested report regarding alert: {original_alert}")
+        print(f"ACTION NEEDED: User {caller_phone_number} requested report regarding alert: {original_alert}") 
+    else:
+        logging.info(f"--> 'report' NOT detected for {caller_phone_number}.")
+        resp.say("Okay. Ending call.", voice='Polly.Joanna', language="en-US")
+        
+    logging.info("Appending Hangup TwiML.")
+    resp.hangup()
+    
+    final_twiml = str(resp)
+    logging.info(f"Generated final TwiML response: {final_twiml}")
+    logging.info(f"--- Exiting /handle-voice-alert-response --- ")
+    return Response(content=final_twiml, media_type="application/xml")
 
 app.include_router(twilio_router)
 
