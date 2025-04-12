@@ -565,55 +565,77 @@ async def make_call(call_request: CallRequest):
 
 
 # New endpoint to proxy Safety Data API calls
-@api_router.get("/shelters", tags=["External APIs"])
-async def get_shelters(region: str, page: int = 1, rows: int = 10):
-    if not safety_data_service_key:
+@api_router.get("/shelters_proxy", tags=["External APIs"])
+async def shelters_proxy(request: Request):
+    # Get coordinates from the query string sent by JavaScript
+    start_lat = request.query_params.get("startLat")
+    end_lat = request.query_params.get("endLat")
+    start_lot = request.query_params.get("startLot")
+    end_lot = request.query_params.get("endLot")
+
+    # Get service key securely (using the one defined earlier or from env)
+    # service_key = os.getenv('SAFETY_DATA_SERVICE_KEY')
+    service_key = os.getenv("SAFETY_DATA_SERVICE_KEY")  # Fallback to placeholder
+
+    if not all([start_lat, end_lat, start_lot, end_lot, service_key]):
+        print(
+            f"Missing parameters: startLat={start_lat}, endLat={end_lat}, startLot={start_lot}, endLot={end_lot}, service_key_present={bool(service_key)}"
+        )
         raise HTTPException(
-            status_code=500, detail="Safety Data API key not configured"
+            status_code=400, detail="Missing coordinate parameters or service key"
         )
 
-    api_url = "https://www.safetydata.go.kr/V2/api/DSSP-IF-10941"
-    params = {
-        "serviceKey": safety_data_service_key,
-        "region": region,
-        "numOfRows": rows,
-        "pageNo": page,
-        "returnType": "json",  # Ensure API returns JSON
-    }
+    # Construct the external API URL
+    external_api_url = (
+        f"https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?"
+        f"serviceKey={service_key}&"
+        f"startLot={start_lot}&endLot={end_lot}&"
+        f"startLat={start_lat}&endLat={end_lat}&"
+        f"pageNo=1&numOfRows=100"  # Fetch up to 100
+    )
+
+    print(f"Proxying request to: {external_api_url}")  # Log the external URL call
+
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(api_url, params=params, timeout=10.0)
-            response.raise_for_status()  # Raise exception for bad status codes
-            data = response.json()
-            # Check for API-specific error structure if known
-            if data.get("response", {}).get("header", {}).get("resultCode") != "00":
-                error_msg = (
-                    data.get("response", {})
-                    .get("header", {})
-                    .get("resultMsg", "Unknown API error")
-                )
-                raise HTTPException(
-                    status_code=500, detail=f"Safety API Error: {error_msg}"
-                )
-            return data  # Return the successful JSON response from the external API
-        except httpx.RequestError as exc:
-            print(f"Error requesting Safety Data API: {exc}")
+            # Make the async request from the server
+            response = await client.get(external_api_url, timeout=10.0)
+            response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+
+            # Return the JSON response from the external API
+            # FastAPI automatically handles JSON response conversion
+            return response.json()
+
+        except httpx.TimeoutException:
+            print(f"Timeout error calling external API: {external_api_url}")
             raise HTTPException(
-                status_code=502, detail="Failed to connect to Safety Data API"
-            )
+                status_code=504, detail="External API timed out"
+            )  # Gateway Timeout
         except httpx.HTTPStatusError as exc:
             print(
-                f"Error response {exc.response.status_code} from Safety Data API: {exc.response.text}"
+                f"HTTP error calling external API: {exc.response.status_code} - {exc.response.text}"
             )
+            # Try to return the actual error from the external API if possible
+            try:
+                error_detail = exc.response.json()
+            except:
+                error_detail = exc.response.text
             raise HTTPException(
                 status_code=exc.response.status_code,
-                detail="Error received from Safety Data API",
+                detail={
+                    "error": "Failed to fetch data from external API",
+                    "details": error_detail,
+                },
             )
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
+        except httpx.RequestError as exc:
+            print(f"Request error calling external API: {exc}")
             raise HTTPException(
-                status_code=500,
-                detail="An internal error occurred while fetching shelter data",
+                status_code=502, detail=f"Error connecting to external API: {exc}"
+            )  # Bad Gateway
+        except Exception as e:
+            print(f"An unexpected error occurred in proxy: {e}")
+            raise HTTPException(
+                status_code=500, detail="An internal server error occurred"
             )
 
 
@@ -934,6 +956,156 @@ async def get_news(location: str, disaster_type: str, items_per_page: int = 20):
         )
 
 
+# Dummy disaster data keyed by ID
+DUMMY_DISASTERS = {
+    "earthquake_gangnam": {
+        "location": "Gangnam-gu, Seoul",
+        "type": "earthquake",
+        "scale": "Magnitude 4.1",
+        "time": "10:30",
+        "coordinates": {"lat": 37.5513455, "lng": 127.0726955},
+        "radius": 3000,
+    },
+    "fire_seongdong": {
+        "location": "Seongdong-gu, Seoul",
+        "type": "large fire",
+        "scale": None,
+        "time": "11:15",
+        "coordinates": {"lat": 37.5637, "lng": 127.0368},
+        "radius": 1500,
+    },
+    "flood_mapo": {
+        "location": "Mapo-gu, Seoul",
+        "type": "flood warning",
+        "scale": "Heavy Rain Advisory",
+        "time": "09:00",
+        "coordinates": {"lat": 37.5665, "lng": 126.9011},  # Near Hongdae
+        "radius": 5000,
+    },
+    # Add more dummy data as needed
+    "default": {  # A default if no ID is provided or matched
+        "location": "Jung-gu, Seoul",
+        "type": "unknown alert",
+        "scale": "N/A",
+        "time": "12:00",
+        "coordinates": {"lat": 37.5665, "lng": 126.9780},  # City Hall area
+        "radius": 2000,
+    },
+}
+
+
+@api_router.get("/disaster/{disaster_id}", tags=["Disaster Info"])
+async def get_disaster_data(disaster_id: str):
+    """
+    Retrieves dummy disaster information based on the provided ID.
+    """
+    disaster_info = DUMMY_DISASTERS.get(disaster_id)
+    if not disaster_info:
+        # Return default disaster if ID not found
+        disaster_info = DUMMY_DISASTERS.get("default")
+
+    return disaster_info
+
+
+@api_router.get("/disaster/", tags=["Disaster Info"])
+async def get_default_disaster_data():
+    """
+    Retrieves default dummy disaster information.
+    """
+    return DUMMY_DISASTERS.get("default")
+
+
+@api_router.get("/emergency_info/{disaster_id}", tags=["Disaster Info"])
+async def get_emergency_info(disaster_id: str):
+    """
+    Returns dummy emergency information for a specific disaster
+    """
+    # Dummy emergency information based on disaster type
+    emergency_info = {
+        "earthquake_gangnam": {
+            "emergency_contacts": {
+                "police": "112",
+                "fire_department": "119",
+                "disaster_management": "02-2128-5800",
+            },
+            "safety_instructions": [
+                "Drop to the ground and take cover under sturdy furniture",
+                "Stay away from windows, exterior walls, and anything that could fall",
+                "If you're outdoors, stay in open areas away from buildings and power lines",
+                "After shaking stops, evacuate to open areas",
+            ],
+            "evacuation_centers": [
+                "Gangnam Community Center - 23 Gangnam-daero, Gangnam-gu",
+                "Yeoksam Elementary School - 146 Teheran-ro, Gangnam-gu",
+                "COEX Convention Center - 513 Yeongdong-daero, Gangnam-gu",
+            ],
+        },
+        "fire_seongdong": {
+            "emergency_contacts": {
+                "police": "112",
+                "fire_department": "119",
+                "disaster_management": "02-2286-5272",
+            },
+            "safety_instructions": [
+                "Cover your mouth and nose with a wet cloth",
+                "Stay close to the floor where air is less toxic",
+                "Do not use elevators, use emergency staircases",
+                "Feel doors before opening - if hot, find another exit route",
+            ],
+            "evacuation_centers": [
+                "Seongdong-gu Office - 18 Wangsan-ro, Seongdong-gu",
+                "Haengdang Public Park - 20 Haengdang-dong, Seongdong-gu",
+                "Seoul Children's Grand Park - 216 Neungdong-ro, Seongdong-gu",
+            ],
+        },
+        "flood_mapo": {
+            "emergency_contacts": {
+                "police": "112",
+                "fire_department": "119",
+                "disaster_management": "02-3153-8332",
+            },
+            "safety_instructions": [
+                "Move to higher ground immediately",
+                "Avoid walking or driving through flooded areas",
+                "Stay away from power lines and electrical wires",
+                "Be cautious of gas leaks and damaged infrastructure",
+            ],
+            "evacuation_centers": [
+                "Mapo Arts Center - 31 World Cup buk-ro, Mapo-gu",
+                "Sogang University Stadium - 35 Baekbeom-ro, Mapo-gu",
+                "Hapjeong Middle School - 26 Wausan-ro, Mapo-gu",
+            ],
+        },
+        "default": {
+            "emergency_contacts": {
+                "police": "112",
+                "fire_department": "119",
+                "disaster_management": "02-120",
+            },
+            "safety_instructions": [
+                "Follow guidance from local authorities",
+                "Turn on radio or TV for emergency information",
+                "If evacuation is advised, do so immediately",
+                "Help others who may require assistance",
+            ],
+            "evacuation_centers": [
+                "Check local government announcements",
+                "Contact 120 (Seoul city information) for nearest evacuation center",
+            ],
+        },
+    }
+
+    # Get emergency info for requested disaster or default if not found
+    info = emergency_info.get(disaster_id, emergency_info["default"])
+
+    # Add generic information that applies to all disasters
+    info["general_advice"] = (
+        "Call 119 for immediate emergencies. Follow official instructions."
+    )
+
+    return info
+
+
 app.include_router(api_router)
 
 # --- Twilio Webhook Endpoints ---
@@ -1004,7 +1176,14 @@ app.include_router(twilio_router)
 
 @app.get("/map/{map_file_name}", response_class=HTMLResponse, tags=["Serving"])
 async def serve_map(request: Request, map_file_name: str):
-    allowed_maps = ["map_api", "map_wide", "shelter_temp", "temp"]
+    allowed_maps = [
+        "minsoo",
+        "disaster_map",
+        "map_api",
+        "map_wide",
+        "shelter_temp",
+        "temp",
+    ]
     base_map_name = map_file_name.replace(".html", "")
     if base_map_name not in allowed_maps:
         raise HTTPException(status_code=404, detail="Map not found")
@@ -1020,6 +1199,31 @@ async def serve_map(request: Request, map_file_name: str):
         return templates.TemplateResponse(template_name, context)
     except Exception as e:
         print(f"Error rendering template {template_name}: {e}")
+        raise HTTPException(
+            status_code=404, detail="Map template not found or error rendering"
+        )
+
+
+# New route that handles disaster_map with disaster_id as path parameter
+@app.get(
+    "/map/disaster_map/{disaster_id}", response_class=HTMLResponse, tags=["Serving"]
+)
+async def serve_disaster_map_with_id(request: Request, disaster_id: str):
+    template_name = "disaster_map.html"
+
+    # Add the disaster_id to the context, which can be used in the template if needed
+    context = {
+        "request": request,
+        "kakao_map_app_key": kakao_map_app_key,
+        "disaster_id": disaster_id,
+    }
+
+    try:
+        return templates.TemplateResponse(template_name, context)
+    except Exception as e:
+        print(
+            f"Error rendering template {template_name} with disaster_id {disaster_id}: {e}"
+        )
         raise HTTPException(
             status_code=404, detail="Map template not found or error rendering"
         )
