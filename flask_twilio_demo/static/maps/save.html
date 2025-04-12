@@ -312,7 +312,7 @@
                     });
 
                     // 8. 위험 반경 표시
-                    new naver.maps.Circle({
+                    const disasterCircle = new naver.maps.Circle({
                         map: map,
                         center: new naver.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng),
                         radius: disasterInfo.radius,
@@ -324,17 +324,39 @@
                         fillOpacity: 0.15
                     });
 
-                    // 9. 지도 영역 설정
-                    const bounds = new naver.maps.LatLngBounds();
-                    bounds.extend(new naver.maps.LatLng(currentLocation.lat, currentLocation.lng));
-                    bounds.extend(new naver.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng));
-                    bounds.extend(new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng));
-                    map.fitBounds(bounds, {
-                        top: 100,
-                        right: 100,
-                        bottom: 100,
-                        left: 100
-                    });
+                    // 9. 지도 영역 설정 - 처음에는 재난 반경을 중심으로 설정
+                    const initialBounds = new naver.maps.LatLngBounds(
+                        new naver.maps.LatLng(
+                            disasterInfo.coordinates.lat - disasterInfo.radius / 111000 * 1.2, // 남쪽 경계 (약간 여유 추가)
+                            disasterInfo.coordinates.lng - disasterInfo.radius / (111000 * Math.cos(disasterInfo.coordinates.lat * Math.PI / 180)) * 1.2 // 서쪽 경계
+                        ),
+                        new naver.maps.LatLng(
+                            disasterInfo.coordinates.lat + disasterInfo.radius / 111000 * 1.2, // 북쪽 경계
+                            disasterInfo.coordinates.lng + disasterInfo.radius / (111000 * Math.cos(disasterInfo.coordinates.lat * Math.PI / 180)) * 1.2 // 동쪽 경계
+                        )
+                    );
+                    
+                    // 재난 반경이 꽉 차도록 지도 초기화
+                    map.fitBounds(initialBounds);
+
+                    // 재난 반경에 따른 적절한 줌 레벨 계산 함수
+                    const calculateZoomFromRadius = (radius) => {
+                        // 반경에 따른 줌 레벨 계산 (반경이 클수록 줌 레벨은 작아짐)
+                        // 1km = 약 줌레벨 14, 5km = 약 줌레벨 12, 10km = 약 줌레벨 10
+                        const baseZoom = 15; // 기준 줌 레벨
+                        const radiusInKm = radius / 1000;
+                        
+                        // 로그 스케일로 줌 레벨 계산 (반경이 커질수록 더 많이 줌아웃)
+                        const zoomAdjustment = Math.log2(radiusInKm) * 1.5;
+                        const calculatedZoom = baseZoom - zoomAdjustment;
+                        
+                        // 줌 레벨 범위 제한 (최소 7, 최대 18)
+                        return Math.min(Math.max(Math.round(calculatedZoom), 7), 18);
+                    };
+                    
+                    // 재난 반경에 따른 줌 레벨 계산
+                    const disasterBasedZoom = calculateZoomFromRadius(disasterInfo.radius);
+                    console.log("Disaster-based zoom level:", disasterBasedZoom);
 
                     // 네비게이션 버튼 설정
                     document.getElementById('goBtn').addEventListener('click', function (e) {
@@ -365,15 +387,52 @@
 
                     // 11. 3초 후 대피소 방향으로 지도 전환
                     setTimeout(() => {
+                        // 현재 위치와 대피소 사이의 중간 지점 계산
                         const centerLat = (currentLocation.lat + shelterInfo.lat) / 2;
                         const centerLng = (currentLocation.lng + shelterInfo.lng) / 2;
                         
+                        // 대피소 마커 표시
                         shelterMarker.setVisible(true);
-
-                        map.morph(new naver.maps.LatLng(centerLat, centerLng), 15, {
-                            duration: 2000,
-                            easing: 'easeOutCubic'
+                        
+                        // 경로가 보이는 경계 설정 (현재 위치와 대피소를 모두 포함하고 약간의 여유 공간)
+                        const routeBounds = new naver.maps.LatLngBounds();
+                        routeBounds.extend(new naver.maps.LatLng(currentLocation.lat, currentLocation.lng));
+                        routeBounds.extend(new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng));
+                        
+                        // 모바일에서 잘 보이도록 여백 추가
+                        routeBounds.extend(new naver.maps.LatLng(
+                            Math.min(currentLocation.lat, shelterInfo.lat) - 0.003,
+                            Math.min(currentLocation.lng, shelterInfo.lng) - 0.003
+                        ));
+                        routeBounds.extend(new naver.maps.LatLng(
+                            Math.max(currentLocation.lat, shelterInfo.lat) + 0.003,
+                            Math.max(currentLocation.lng, shelterInfo.lng) + 0.003
+                        ));
+                        
+                        // 부드러운 전환을 위해 morph 사용 - 중간 지점으로 이동 후 적절한 줌 레벨 적용
+                        // disasterBasedZoom보다 약간 더 확대(+2)하여 경로를 잘 보이게 함
+                        const routeZoom = disasterBasedZoom + 2;
+                        console.log("Route zoom level:", routeZoom);
+                        
+                        map.morph(new naver.maps.LatLng(centerLat, centerLng), routeZoom, {
+                            duration: 2500, // 전환 시간 (ms)
+                            easing: 'easeOutCubic' // 부드러운 전환을 위한 easing 함수
                         });
+                        
+                        // 경로가 보이도록 bounds 적용 (필요한 경우에만)
+                        setTimeout(() => {
+                            // 현재 보이는 영역에 경로가 모두 포함되어 있는지 확인
+                            const currentBounds = map.getBounds();
+                            if (!currentBounds.hasLatLng(new naver.maps.LatLng(currentLocation.lat, currentLocation.lng)) || 
+                                !currentBounds.hasLatLng(new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng))) {
+                                map.fitBounds(routeBounds, {
+                                    top: 50,
+                                    right: 50,
+                                    bottom: 50,
+                                    left: 50
+                                });
+                            }
+                        }, 2600); // 첫 번째 transition이 끝난 후 bounds 확인
 
                         document.querySelector('.status').textContent = 
                             '✨ Please check the safe route to the nearest shelter.';
