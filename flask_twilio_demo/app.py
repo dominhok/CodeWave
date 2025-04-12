@@ -223,6 +223,24 @@ def filter_target_users_by_location(db: Session, disaster_lat: float, disaster_l
             logging.warning(f"User {user.id} skipped due to missing coordinates (lat={user.latitude}, lon={user.longitude}).")
     return target_users
 
+# --- Korean to English Disaster Type Mapping ---
+DISASTER_TYPE_MAP_KO_EN = {
+    "지진": "Earthquake",
+    "태풍": "Typhoon",
+    "호우": "Heavy Rain",
+    "홍수": "Flood",
+    "강풍": "Strong Wind",
+    "풍랑": "High Waves",
+    "대설": "Heavy Snow",
+    "한파": "Cold Wave",
+    "폭염": "Heat Wave",
+    "가뭄": "Drought",
+    "황사": "Yellow Dust",
+    "화재": "Fire",
+    "산불": "Wildfire",
+    "미세먼지": "Fine Dust",
+}
+
 # --- RAG Based Message Generation (Target Length ~60, No URL, No Ellipsis) ---
 def generate_notification_messages(disaster_alert: DisasterAlertData, users: List[User]) -> List[dict]:
     """Generates structured notification messages using RAG, targeting ~60 chars, without URL or ellipsis on truncation."""
@@ -333,19 +351,36 @@ def generate_notification_messages(disaster_alert: DisasterAlertData, users: Lis
 def generate_voice_alert_message(disaster_alert: DisasterAlertData) -> str:
     """
     Generates an English voice alert message using RAG, suitable for TTS delivery.
-    Includes disaster info, key actions, and prompts for user response ('Report').
+    Includes disaster info (with core region name, English type), key actions, and prompts ('Report').
     """
-    # Base alert info in English
-    base_alert_info = f"{disaster_alert.DST_SE_NM} in {disaster_alert.RCPTN_RGN_NM}"
-    print(f"Base Alert Info for VOICE RAG query: {base_alert_info}")
+    # --- Extract Core Region Name ---
+    core_region_name = _extract_region_from_address(disaster_alert.RCPTN_RGN_NM)
+    if core_region_name is None:
+        logging.warning(f"Could not extract core region from '{disaster_alert.RCPTN_RGN_NM}'. Using full name.")
+        core_region_name = disaster_alert.RCPTN_RGN_NM # Fallback to full name
+    else:
+        logging.info(f"Extracted core region '{core_region_name}' from '{disaster_alert.RCPTN_RGN_NM}'.")
+    # -------------------------------
+
+    # --- Translate Disaster Type to English ---
+    disaster_type_ko = disaster_alert.DST_SE_NM
+    disaster_type_en = DISASTER_TYPE_MAP_KO_EN.get(disaster_type_ko, disaster_type_ko) # Fallback to Korean if no map
+    if disaster_type_en == disaster_type_ko and disaster_type_ko not in DISASTER_TYPE_MAP_KO_EN:
+         logging.warning(f"No English mapping found for disaster type '{disaster_type_ko}'. Using original.")
+    # ---------------------------------------
+
+    # Base alert info in English, using the core region name and English disaster type
+    base_alert_info = f"{disaster_type_en} in {core_region_name}" # Use English type
+    print(f"Base Alert Info for VOICE RAG query (Eng Type, Core Region): {base_alert_info}")
 
     # Target length for the main RAG content (excluding the final prompt)
-    target_rag_len = 150 
-    total_max_len = 200 
+    target_rag_len = 90 # 길이를 90으로 더 줄임
+    total_max_len = 150 # 총 길이는 여유 있게 (report 프롬프트 포함)
     # Fixed ENGLISH prompt to ask the user to say 'Report'
     report_prompt_text = " If you need to report something, please say 'Report'." 
 
     voice_message_content = ""
+    global vectorstore # Access the global vectorstore
 
     if vectorstore is None:
         print("  WARNING: Vectorstore not available for VOICE RAG. Using fallback.")
@@ -365,26 +400,31 @@ def generate_voice_alert_message(disaster_alert: DisasterAlertData) -> str:
         llm = ChatUpstage(api_key=upstage_api_key, model="solar-pro")
         retriever = vectorstore.as_retriever()
 
-        # --- Voice-Optimized English Prompt (Remains the same) ---
+        # --- EXTREMELY Concise English Prompt --- 
+        # The prompt template itself remains the same, 
+        # but the {base_alert_info} variable inside will now use the core region name.
         prompt_template = f"""
-        Generate a clear and concise emergency alert message in ENGLISH, suitable for voice delivery (Text-to-Speech). 
-        Aim for approximately {target_rag_len} characters for this main alert portion.
-
-        Include:
-        1. Disaster Type and Location: [from {{question}}]
-        2. 1-2 CRITICAL immediate actions based on the context documents. Be direct.
+        Task: Generate an ultra-brief ENGLISH voice alert message.
+        Output Format: "ALERT: [Disaster Type] in [Location from Input]. [1-2 Critical Actions from Context]."
+        Strict Constraints:
+        - Use ONLY provided Context and Input Alert Details.
+        - Actions MUST be from Context.
+        - Location MUST be from Input Details ({base_alert_info}). NO GUESSING.
+        - ABSOLUTELY NO extra information or description.
+        - Max {target_rag_len} characters for this core message.
 
         Context Documents (for action guidance):
         {{context}}
 
-        Output ONLY the core alert message text. Do NOT include any introductory phrases like "Here is the alert".
-        Example: "ALERT: Heavy rain advisory for Seoul Gangnam-gu. Avoid low-lying areas. Monitor updates closely."
+        Input Alert Details (for disaster type/location):
+        {{question}}
 
-        Core Alert Message (target ~{target_rag_len} chars):
+        Core Alert Message (Max {target_rag_len} chars):
         """
         PROMPT = PromptTemplate(
             template=prompt_template, input_variables=["context", "question"]
         )
+        # --------------------------------------
 
         qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
@@ -394,10 +434,10 @@ def generate_voice_alert_message(disaster_alert: DisasterAlertData) -> str:
             return_source_documents=False
         )
         
-        query = base_alert_info
+        query = base_alert_info # Use disaster type/location as the query for RAG context
         print(f"  Voice RAG Query: {query}")
         
-        result = qa_chain.invoke({"query": query})
+        result = qa_chain.invoke({"query": query}) # Pass the query here
         rag_summary_text = result.get('result', '').strip()
         
         print(f"  Voice RAG Generated Response (raw core text):\n{rag_summary_text}")
