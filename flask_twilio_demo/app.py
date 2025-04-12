@@ -28,7 +28,7 @@ from . import models
 from .models import Base, engine, User, get_db
 
 # --- Langchain Imports ---
-from langchain.schema import Document
+from langchain.schema import Document, HumanMessage
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_upstage import UpstageEmbeddings, ChatUpstage # Use ChatUpstage
 from langchain_community.vectorstores import FAISS
@@ -145,7 +145,7 @@ class UserBase(BaseModel):
     has_guardian: bool = Field(False, alias='hasGuardian')
     guardian_phone_number: Optional[str] = Field(None, alias='guardianPhone')
     wants_info_call: bool = Field(True, alias='needCall')
-    preferred_language: Optional[str] = None
+    preferred_language: Optional[str] = Field(None, alias='preferredLanguage')
 
     class Config:
         populate_by_name = True
@@ -261,177 +261,268 @@ DISASTER_TYPE_MAP_KO_EN = {
     "미세먼지": "Fine Dust",
 }
 
-# --- RAG Based Message Generation (Target Length ~60, No URL, No Ellipsis) ---
-def generate_notification_messages(disaster_alert: DisasterAlertData, users: List[User]) -> List[dict]:
-    """Generates structured notification messages using RAG, targeting ~60 chars, without URL or ellipsis on truncation."""
-    notifications = []
-    # Base alert in English, formatted concisely
-    base_alert_info = f"{disaster_alert.DST_SE_NM} in {disaster_alert.RCPTN_RGN_NM}"
-    print(f"Base Alert Info for RAG query: {base_alert_info}")
+# --- Language Code Mappings and Helper ---
+LANG_CODE_TO_NAME = {
+    "ko": "Korean",
+    "en": "English",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "hi": "Hindi",
+    # Add other languages supported by your form/LLM
+}
+DEFAULT_LANG_NAME = "Korean" # Default language if preference is missing or unknown
 
-    # Adjust target length for RAG - VERY Short target
+def get_twilio_lang_code(lang_code: Optional[str]) -> str:
+    """Maps our internal language code (e.g., 'ko') to Twilio standard codes (e.g., 'ko-KR')."""
+    # Maps our language codes to Twilio standard voice/gather codes
+    mapping = {
+        "ko": "ko-KR",
+        "en": "en-US", # Or en-GB, en-AU etc.
+        "ja": "ja-JP",
+        "zh": "zh-CN", # Mandarin - Simplified
+        # Add more mappings as needed for Twilio supported voices
+    }
+    # Default to Korean if lang_code is None or not in mapping
+    default_twilio_code = "ko-KR"
+    if lang_code is None:
+        return default_twilio_code
+    return mapping.get(lang_code, default_twilio_code)
+
+# --- Upstage Translation Helper --- 
+def translate_ko_to_en(text: str) -> Optional[str]:
+    """Translates Korean text to English using Upstage translation model."""
+    upstage_api_key = os.getenv("UPSTAGE_API_KEY")
+    if not upstage_api_key:
+        logging.error("UPSTAGE_API_KEY not found. Cannot perform translation.")
+        return None
+
+    try:
+        # Initialize the specific translation chat model
+        translation_chat = ChatUpstage(api_key=upstage_api_key, model="translation-koen")
+        
+        # Simple invocation (adjust if history/system prompt is needed)
+        messages = [HumanMessage(content=text)]
+        response = translation_chat.invoke(messages)
+        
+        translated_text = response.content.strip() if response and response.content else None
+        if translated_text:
+            logging.info(f"Successfully translated KO>EN: '{text[:30]}...' -> '{translated_text[:30]}...'")
+            return translated_text
+        else:
+            logging.warning(f"Translation KO>EN resulted in empty content for input: {text[:50]}...")
+            return None
+            
+    except Exception as e:
+        logging.error(f"Error during Upstage translation KO>EN: {e}", exc_info=True)
+        return None
+# ----------------------------------
+
+# --- User Specific RAG Context Retrieval Helper ---
+def _get_user_specific_rag_context(db_user: User, disaster_alert: DisasterAlertData) -> str:
+    """Retrieves RAG context filtered by disaster type and user vulnerability type."""
+    global vectorstore
+    if not vectorstore:
+        logging.warning("Vectorstore not available, cannot retrieve RAG context.")
+        return "" # Return empty string if no vectorstore
+
+    # 1. Determine disaster type key for filtering
+    disaster_type_ko = disaster_alert.DST_SE_NM
+    disaster_type_en_key = next((en.lower().replace(" ", "") for ko, en in DISASTER_TYPE_MAP_KO_EN.items() if ko == disaster_type_ko), None)
+    if not disaster_type_en_key:
+        logging.warning(f"Could not map disaster type '{disaster_type_ko}' for RAG filter. No context retrieved.")
+        return ""
+
+    # 2. Determine user vulnerability type key for filtering
+    # Assuming user.vulnerability_type directly matches the metadata keys (e.g., 'visual', 'hearing', 'elderly')
+    # If not, mapping might be needed here too.
+    user_type_key = db_user.vulnerability_type
+    # Include 'normal' type documents for everyone
+    allowed_vulnerability_types = [user_type_key, 'normal'] 
+
+    # 3. Prepare the query (using English disaster type and region)
+    core_region_name = _extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM
+    disaster_type_en = DISASTER_TYPE_MAP_KO_EN.get(disaster_type_ko, disaster_type_ko)
+    base_query = f"{disaster_type_en} in {core_region_name}"
+
+    # 4. Perform filtered similarity search
+    relevant_docs = []
+    try:
+        # Use similarity search to get candidates first
+        # Increase k slightly to ensure potential matches aren't missed before metadata filtering
+        results_with_scores = vectorstore.similarity_search_with_score(base_query, k=7) 
+
+        # Apply metadata filters in Python
+        filtered_docs = []
+        logging.info(f"Filtering RAG results for disaster='{disaster_type_en_key}', user_types={allowed_vulnerability_types}")
+        for doc, score in results_with_scores:
+            doc_meta_disaster = doc.metadata.get('disaster_type')
+            doc_meta_vuln = doc.metadata.get('vulnerability_type')
+            
+            # Check if disaster type matches AND vulnerability type is allowed
+            if doc_meta_disaster == disaster_type_en_key and doc_meta_vuln in allowed_vulnerability_types:
+                filtered_docs.append(doc)
+                logging.info(f"  - Matched Doc: disaster='{doc_meta_disaster}', vuln='{doc_meta_vuln}', source='{doc.metadata.get('source')}'")
+                # Limit the number of documents to use (e.g., top 3)
+                if len(filtered_docs) >= 3:
+                    break 
+            # else: 
+            #     logging.debug(f"  - Skipped Doc: disaster='{doc_meta_disaster}', vuln='{doc_meta_vuln}'")
+        
+        relevant_docs = filtered_docs
+        logging.info(f"Retrieved {len(relevant_docs)} specific relevant docs for user {db_user.id}.")
+
+    except Exception as e:
+        logging.error(f"Error during user-specific RAG search for user {db_user.id}: {e}", exc_info=True)
+        relevant_docs = []
+
+    # 5. Combine content into a single string
+    context_string = "\n\n".join([doc.page_content for doc in relevant_docs])
+    return context_string
+# --------------------------------------------------
+
+# --- RAG Based Message Generation (Korean, takes user info for prompt) ---
+def generate_notification_messages(disaster_alert: DisasterAlertData, user: User) -> str: # Takes user object
+    """Generates a Korean SMS alert message considering user type via prompt."""
+    # Base alert info (English for RAG query consistency)
+    base_alert_info_en = f"{DISASTER_TYPE_MAP_KO_EN.get(disaster_alert.DST_SE_NM, disaster_alert.DST_SE_NM)} in {_extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM}"
+    print(f"Base Alert Info for SMS RAG query: {base_alert_info_en}")
+
     target_rag_len = 60 
-    total_max_len = 70 # Ensure total length doesn't exceed this
+    total_max_len = 70
+    rag_response_content = "" 
+    global vectorstore
 
-    rag_response_content = "" # Initialize with empty string
     if vectorstore is None:
         print("  WARNING: Vectorstore not available. Cannot generate RAG content.")
-        # Fallback message (no URL)
-        fallback_base = f"ALERT: {base_alert_info}. Follow local guidance."
-        if len(fallback_base) > total_max_len: # Check against total max (70)
-             # Hard truncate, no ellipsis
-             rag_response_content = fallback_base[:total_max_len]
-        else:
-             rag_response_content = fallback_base
+        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({_extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM}) 발생. 관련 기관 안내 확인."
+        rag_response_content = fallback_base[:total_max_len]
+        return rag_response_content
 
-    else:
-        try:
-            upstage_api_key = os.getenv("UPSTAGE_API_KEY")
-            llm = ChatUpstage(api_key=upstage_api_key, model="solar-pro")
-            retriever = vectorstore.as_retriever()
-
-            # --- Updated English Prompt (Targeting ~60 chars, EXTREME brevity) --- 
-            prompt_template = f"""
-            Generate an EXTREMELY concise emergency alert message in ENGLISH, strictly aiming for {target_rag_len} characters or less.
-
-            Required Information (must be included):
-            1. Disaster Type: [from {{question}}]
-            2. Location: [from {{question}}]
-            3. 1 brief CRITICAL immediate action.
-
-            Context Documents (for action guidance):
-            {{context}}
-
-            Output ONLY the SMS-ready alert text. ABSOLUTELY NO EXTRA TEXT. BE EXTREMELY BRIEF.
-            Example: "ALERT: Earthquake Seoul Seongdong-gu. Drop, Cover, Hold On."
-
-            Alert Message (target ~{target_rag_len} chars):
-            """
-            PROMPT = PromptTemplate(
-                template=prompt_template, input_variables=["context", "question"]
-            )
-
-            qa_chain = RetrievalQA.from_chain_type(
-                llm=llm,
-                chain_type="stuff",
-                retriever=retriever,
-                chain_type_kwargs={"prompt": PROMPT},
-                return_source_documents=False
-            )
-            
-            query = base_alert_info
-            print(f"  RAG Query: {query}")
-            
-            result = qa_chain.invoke({"query": query})
-            rag_summary_text = result.get('result', '').strip()
-            
-            print(f"  RAG Generated Response (raw):\n{rag_summary_text}")
-
-            # --- Simplified Truncation Logic (NO ELLIPSIS) --- 
-            if not rag_summary_text: # If RAG failed or returned empty
-                print("  WARNING: RAG generation resulted in empty string. Using fallback.")
-                fallback_base = f"ALERT: {base_alert_info}. Check official sources."
-                if len(fallback_base) > total_max_len: # Check against total max (70)
-                     # Hard truncate, no ellipsis
-                     rag_response_content = fallback_base[:total_max_len]
-                else:
-                     rag_response_content = fallback_base
-            else:
-                # Use the generated text directly
-                rag_response_content = rag_summary_text
-                
-                # Final hard check to ensure total length doesn't exceed absolute max (70)
-                if len(rag_response_content) > total_max_len:
-                     print(f"  WARNING: Final message still exceeds {total_max_len} chars. Force truncating (hard cut). Len: {len(rag_response_content)}")
-                     rag_response_content = rag_response_content[:total_max_len]
-
-        except Exception as e:
-            print(f"  ERROR during RAG generation: {e}")
-            # Fallback message on error (no URL)
-            fallback_base = f"ALERT: {base_alert_info}. Error getting details. Follow local guidance."
-            if len(fallback_base) > total_max_len: # Check against total max (70)
-                 # Hard truncate, no ellipsis
-                 rag_response_content = fallback_base[:total_max_len]
-            else:
-                 rag_response_content = fallback_base
-
-    # --- End RAG Generation --- 
-
-    # Log the final generated message content and its length 
-    logging.info(f"Final generated message content (Alert only, ~60 chars, no ellipsis):\n{rag_response_content}")
-    logging.info(f"---> Final Alert message length: {len(rag_response_content)} chars")
-
-    for user in users:
-        # Message content no longer includes the URL here
-        notifications.append({"user": user, "message": rag_response_content})
+    try:
+        # Determine disaster type key for filtering RAG context
+        disaster_type_ko = disaster_alert.DST_SE_NM
+        disaster_type_en_key = next((en.lower().replace(" ", "") for ko, en in DISASTER_TYPE_MAP_KO_EN.items() if ko == disaster_type_ko), None)
         
-    return notifications
+        upstage_api_key = os.getenv("UPSTAGE_API_KEY")
+        llm = ChatUpstage(api_key=upstage_api_key, model="solar-pro")
+        
+        # Retriever setup: Filter ONLY by disaster type
+        search_kwargs = {}
+        if disaster_type_en_key:
+            search_kwargs['filter'] = {'disaster_type': disaster_type_en_key}
+            logging.info(f"Applying RAG metadata filter: disaster_type='{disaster_type_en_key}'")
+        else:
+            logging.warning("No disaster type filter applied for RAG retriever.")
+        retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
 
-# --- RAG Based VOICE Message Generation (ENGLISH) ---
-def generate_voice_alert_message(disaster_alert: DisasterAlertData) -> str:
-    """
-    Generates an English voice alert message using RAG, suitable for TTS delivery.
-    Includes disaster info (with core region name, English type), key actions, and prompts ('Report').
-    """
-    # --- Extract Core Region Name ---
-    core_region_name = _extract_region_from_address(disaster_alert.RCPTN_RGN_NM)
-    if core_region_name is None:
-        logging.warning(f"Could not extract core region from '{disaster_alert.RCPTN_RGN_NM}'. Using full name.")
-        core_region_name = disaster_alert.RCPTN_RGN_NM # Fallback to full name
-    else:
-        logging.info(f"Extracted core region '{core_region_name}' from '{disaster_alert.RCPTN_RGN_NM}'.")
-    # -------------------------------
+        # Get RAG context based on disaster type
+        query = base_alert_info_en 
+        relevant_docs = retriever.get_relevant_documents(query)
+        rag_context = "\n\n".join([doc.page_content for doc in relevant_docs])
+        logging.info(f"Retrieved {len(relevant_docs)} docs for context (disaster filter only).")
 
-    # --- Translate Disaster Type to English ---
+        # --- Korean Prompt including User Type --- 
+        user_type_info = f"(수신자 특성: {user.vulnerability_type})"
+        prompt_template = f"""
+        제공된 정보와 참고 문서를 바탕으로, 가장 중요한 핵심 대처 방안 1가지를 포함하여 한국어로 간결한 비상 알림 메시지를 생성하세요.
+        {user_type_info} 이 정보를 참고하여 답변의 뉘앙스나 강조점을 조절할 수 있습니다.
+        목표 길이: {target_rag_len}자 내외. 추가 설명 없이 알림 내용만 출력하세요.
+
+        참고 문서:
+        {{context}}
+
+        입력 알림 정보 (재난 유형/지역):
+        {{question}}
+
+        알림 메시지 (목표 ~{target_rag_len}자, 한국어):
+        """
+        PROMPT = PromptTemplate(
+            template=prompt_template, input_variables=["context", "question"]
+        )
+        # -----------------------------------------
+
+        # Construct the full prompt and invoke LLM
+        full_prompt = PROMPT.format(context=rag_context, question=query)
+        llm_response = llm.invoke(full_prompt)
+        rag_summary_text = llm_response.content.strip() if llm_response and llm_response.content else ""
+        print(f"  LLM Generated SMS Response (raw): {rag_summary_text}")
+
+        # Truncation Logic
+        if not rag_summary_text:
+            fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({_extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM}). 공식 발표 확인."
+            rag_response_content = fallback_base[:total_max_len]
+        else:
+            rag_response_content = rag_summary_text
+            if len(rag_response_content) > total_max_len:
+                 rag_response_content = rag_response_content[:total_max_len]
+
+    except Exception as e:
+        print(f"  ERROR during LLM generation for SMS for user {user.id}: {e}")
+        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({_extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM}). 오류 발생. 관련 기관 확인."
+        rag_response_content = fallback_base[:total_max_len]
+
+    logging.info(f"Final generated KOREAN SMS content for user {user.id}: {rag_response_content}")
+    return rag_response_content
+
+# --- RAG Based VOICE Message Generation (Korean, takes user info for prompt) ---
+def generate_voice_alert_message(disaster_alert: DisasterAlertData, user: User) -> str: # Takes user object
+    """
+    Generates a Korean voice alert message considering user type via prompt.
+    Does NOT include the trailing 'Report' prompt here.
+    """
+    # --- Base Info & RAG Setup --- 
+    core_region_name = _extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM
     disaster_type_ko = disaster_alert.DST_SE_NM
-    disaster_type_en = DISASTER_TYPE_MAP_KO_EN.get(disaster_type_ko, disaster_type_ko) # Fallback to Korean if no map
-    if disaster_type_en == disaster_type_ko and disaster_type_ko not in DISASTER_TYPE_MAP_KO_EN:
-         logging.warning(f"No English mapping found for disaster type '{disaster_type_ko}'. Using original.")
-    # ---------------------------------------
+    disaster_type_en = DISASTER_TYPE_MAP_KO_EN.get(disaster_type_ko, disaster_type_ko)
+    base_alert_info_en = f"{disaster_type_en} in {core_region_name}"
+    print(f"Base Alert Info for VOICE RAG query: {base_alert_info_en}")
 
-    # Base alert info in English, using the core region name and English disaster type
-    base_alert_info = f"{disaster_type_en} in {core_region_name}" # Use English type
-    print(f"Base Alert Info for VOICE RAG query (Eng Type, Core Region): {base_alert_info}")
-
-    # Target length for the main RAG content (excluding the final prompt)
-    target_rag_len = 90 # 길이를 90으로 더 줄임
-    total_max_len = 150 # 총 길이는 여유 있게 (report 프롬프트 포함)
-    # Fixed ENGLISH prompt to ask the user to say 'Report'
-    report_prompt_text = " If you need to report something, please say 'Report'." 
-
+    target_rag_len = 90
     voice_message_content = ""
-    global vectorstore # Access the global vectorstore
+    global vectorstore
 
     if vectorstore is None:
-        print("  WARNING: Vectorstore not available for VOICE RAG. Using fallback.")
-        # English Fallback
-        fallback_base = f"Emergency alert regarding {base_alert_info}. Please follow guidance from local authorities."
-        if len(fallback_base) > (total_max_len - len(report_prompt_text)):
-            # Truncate base if too long, keeping space for prompt
-            fallback_base = fallback_base[:(total_max_len - len(report_prompt_text) - 3)] + "..."
-        voice_message_content = fallback_base + report_prompt_text
+        print("  WARNING: Vectorstore not available. Cannot generate RAG content for Voice.")
+        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({core_region_name}) 발생. 관련 기관 안내를 확인하십시오."
+        voice_message_content = fallback_base[:target_rag_len]
         return voice_message_content
 
     try:
+        # Determine disaster type key for filtering RAG context
+        disaster_type_en_key = next((en.lower().replace(" ", "") for ko, en in DISASTER_TYPE_MAP_KO_EN.items() if ko == disaster_type_ko), None)
+        
         upstage_api_key = os.getenv("UPSTAGE_API_KEY")
         if not upstage_api_key:
              raise ValueError("UPSTAGE_API_KEY not found.")
-             
         llm = ChatUpstage(api_key=upstage_api_key, model="solar-pro")
-        retriever = vectorstore.as_retriever()
+        
+        # Retriever setup: Filter ONLY by disaster type
+        search_kwargs = {}
+        if disaster_type_en_key:
+            search_kwargs['filter'] = {'disaster_type': disaster_type_en_key}
+            logging.info(f"Applying RAG metadata filter: disaster_type='{disaster_type_en_key}'")
+        else:
+            logging.warning("No disaster type filter applied for RAG retriever.")
+        retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
 
-        # --- EXTREMELY Concise English Prompt --- 
-        # The prompt template itself remains the same, 
-        # but the {base_alert_info} variable inside will now use the core region name.
+        # Get RAG context based on disaster type
+        query = base_alert_info_en
+        relevant_docs = retriever.get_relevant_documents(query)
+        rag_context = "\n\n".join([doc.page_content for doc in relevant_docs])
+        logging.info(f"Retrieved {len(relevant_docs)} docs for context (disaster filter only).")
+
+        # --- Korean Voice Prompt including User Type --- 
+        user_type_info = f"(수신자 특성: {user.vulnerability_type})"
         prompt_template = f"""
-        Task: Generate an ultra-brief ENGLISH voice alert message.
-        Output Format: "ALERT: [Disaster Type] in [Location from Input]. [1-2 Critical Actions from Context]."
-        Strict Constraints:
-        - Use ONLY provided Context and Input Alert Details.
-        - Actions MUST be from Context.
-        - Location MUST be from Input Details ({base_alert_info}). NO GUESSING.
-        - ABSOLUTELY NO extra information or description.
-        - Max {target_rag_len} characters for this core message.
+        Task: 한국어로 간결한 음성 안내 메시지의 핵심 내용을 생성.
+        Output Format: "[경보 종류] [지역] 상황. [핵심 행동 1-2가지]."
+        Strict Rules:
+        - 제공된 정보(Context, Input)와 수신자 특성({user_type_info})을 참고하여 생성.
+        - 핵심 행동은 Context에서 가져올 것.
+        - 지역명은 Input({base_alert_info_en}) 기반으로 하되 자연스럽게.
+        - 추가 설명 절대 금지.
+        - 목표 길이: {target_rag_len}자 내외.
+        - 끝에 'Report' 관련 문구는 절대 포함하지 말 것.
 
         Context Documents (for action guidance):
         {{context}}
@@ -439,187 +530,36 @@ def generate_voice_alert_message(disaster_alert: DisasterAlertData) -> str:
         Input Alert Details (for disaster type/location):
         {{question}}
 
-        Core Alert Message (Max {target_rag_len} chars):
+        Core Alert Message (Max {target_rag_len} chars, 한국어):
         """
         PROMPT = PromptTemplate(
             template=prompt_template, input_variables=["context", "question"]
         )
-        # --------------------------------------
+        # ---------------------------------------------
+        
+        # Construct the full prompt and invoke LLM
+        full_prompt = PROMPT.format(context=rag_context, question=query)
+        llm_response = llm.invoke(full_prompt)
+        rag_summary_text = llm_response.content.strip() if llm_response and llm_response.content else ""
+        print(f"  LLM Generated Voice Response (raw core text): {rag_summary_text}")
 
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            chain_type_kwargs={"prompt": PROMPT},
-            return_source_documents=False
-        )
-        
-        query = base_alert_info # Use disaster type/location as the query for RAG context
-        print(f"  Voice RAG Query: {query}")
-        
-        result = qa_chain.invoke({"query": query}) # Pass the query here
-        rag_summary_text = result.get('result', '').strip()
-        
-        print(f"  Voice RAG Generated Response (raw core text):\n{rag_summary_text}")
-
-        # --- Assemble Final Voice Message (with English prompt) ---
+        # Truncation Logic
         if not rag_summary_text:
-            print("  WARNING: Voice RAG generation resulted in empty string. Using fallback.")
-            # English Fallback
-            fallback_base = f"ALERT: {base_alert_info}. Check official sources for guidance."
-            if len(fallback_base) > (total_max_len - len(report_prompt_text)):
-                 fallback_base = fallback_base[:(total_max_len - len(report_prompt_text) - 3)] + "..."
-            voice_message_content = fallback_base + report_prompt_text
+            print("  WARNING: LLM generation resulted in empty string. Using fallback.")
+            fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({core_region_name}). 공식 발표 확인."
+            voice_message_content = fallback_base[:target_rag_len]
         else:
-            # Truncate the RAG part if it exceeds its target length
-            if len(rag_summary_text) > target_rag_len:
-                print(f"  WARNING: Voice RAG core text exceeded target {target_rag_len} chars ({len(rag_summary_text)}). Hard truncating.")
-                rag_summary_text = rag_summary_text[:target_rag_len] 
-            
-            # Combine core message and the fixed English reporting prompt
-            voice_message_content = rag_summary_text + report_prompt_text
-            
-            # Final check on total length
-            if len(voice_message_content) > total_max_len:
-                 print(f"  WARNING: Final VOICE message still exceeds {total_max_len} chars ({len(voice_message_content)}). Force truncating final.")
-                 voice_message_content = voice_message_content[:total_max_len]
+            voice_message_content = rag_summary_text
+            if len(voice_message_content) > target_rag_len:
+                 voice_message_content = voice_message_content[:target_rag_len]
 
     except Exception as e:
-        print(f"  ERROR during Voice RAG generation: {e}")
-        # English Fallback on error
-        fallback_base = f"ALERT: {base_alert_info}. Error retrieving details. Follow local guidance."
-        if len(fallback_base) > (total_max_len - len(report_prompt_text)):
-             fallback_base = fallback_base[:(total_max_len - len(report_prompt_text) - 3)] + "..."
-        voice_message_content = fallback_base + report_prompt_text
+        print(f"  ERROR during LLM generation for Voice for user {user.id}: {e}")
+        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({core_region_name}). 오류 발생. 관련 기관 확인."
+        voice_message_content = fallback_base[:target_rag_len]
 
-    # Log the final generated message content and its length
-    logging.info(f"Final generated ENGLISH VOICE message content:\n{voice_message_content}")
-    logging.info(f"---> Final VOICE message length: {len(voice_message_content)} chars")
-    
+    logging.info(f"Final generated KOREAN VOICE core content for user {user.id}: {voice_message_content}")
     return voice_message_content
-
-# --- Function to send Twilio SMS (Map URL first, then alert with delay) --- 
-# Revert signature, use hardcoded base_url inside
-def send_twilio_notifications(notifications_to_send: List[dict]) -> dict:
-    """Sends notifications via Twilio SMS (map URL first, then alert with delay) and returns counts."""
-    successful_notifications = 0
-    failed_notifications = 0
-    
-    # Check Twilio config
-    if not client or not twilio_phone_number:
-        print("  ERROR: Twilio client not configured. Cannot send SMS.")
-        logging.error("Twilio client not configured. Cannot send SMS.") 
-        return {"success": successful_notifications, "failed": len(notifications_to_send)} 
-
-    # --- HARDCODED base_url --- 
-    hardcoded_base_url = "https://5eaf-121-160-208-235.ngrok-free.app"
-    # --------------------------
-    full_map_url = f"{hardcoded_base_url}/map/map_api"
-    map_message_body = f"Nearby shelters/safety info: {full_map_url}" 
-
-    print(f"--- SENDING REAL TWILIO NOTIFICATIONS (2-Step: Map URL: {full_map_url} + Alert) --- ")
-    logging.info(f"--- Starting to send real Twilio notifications (Map URL + Alert) using hardcoded base URL: {hardcoded_base_url} ---") 
-    for item in notifications_to_send:
-        user = item["user"]
-        alert_message_body = item["message"]
-        
-        try:
-            # 1. Send the MAP URL SMS first
-            logging.info(f"  1 -> Attempting to send MAP URL SMS ({map_message_body}) to {user.phone_number} (User ID: {user.id})")
-            message1 = client.messages.create(
-                body=map_message_body,
-                from_=twilio_phone_number,
-                to=user.phone_number
-            )
-            logging.info(f"    Map URL SMS sent successfully! SID: {message1.sid} to {user.phone_number}")
-
-            # 2. If map URL SMS was successful, wait briefly and send the main alert message
-            try:
-                logging.info(f"  ... Waiting 0.5 seconds before sending alert SMS ...")
-                time.sleep(0.5)
-                
-                logging.info(f"  2 -> Attempting to send ALERT SMS to {user.phone_number} (User ID: {user.id}). Content:\n{alert_message_body}")
-                message2 = client.messages.create(
-                    body=alert_message_body,
-                    from_=twilio_phone_number,
-                    to=user.phone_number
-                )
-                logging.info(f"    Alert SMS sent successfully! SID: {message2.sid} to {user.phone_number}")
-                successful_notifications += 1
-                
-            except Exception as e2:
-                logging.error(f"    ERROR sending ALERT SMS to {user.phone_number} after successful map URL: {e2}", exc_info=True) 
-                failed_notifications += 1
-
-        except Exception as e1:
-            logging.error(f"    ERROR sending MAP URL SMS to {user.phone_number}: {e1}", exc_info=True) 
-            failed_notifications += 1
-            
-    logging.info(f"--- Notification sending complete (Success pairs: {successful_notifications}, Failed attempts: {failed_notifications}) ---")
-    return {"success": successful_notifications, "failed": failed_notifications}
-
-# --- Function to send Twilio VOICE alerts (ENGLISH) --- 
-# Revert signature, use hardcoded base_url inside
-def send_twilio_voice_alerts(notifications_to_send: List[dict]) -> dict:
-    """Sends English voice alerts via Twilio Call API using generated TwiML, passing alert context."""
-    successful_calls = 0
-    failed_calls = 0
-    
-    if not client or not twilio_phone_number:
-        print("  ERROR: Twilio client not configured. Cannot make calls.")
-        logging.error("Twilio client not configured for making calls.") 
-        return {"success": successful_calls, "failed": len(notifications_to_send)}
-
-    # --- HARDCODED base_url --- 
-    hardcoded_base_url = "https://5eaf-121-160-208-235.ngrok-free.app"
-    # --------------------------
-
-    print(f"--- SENDING ENGLISH VOICE CALL ALERTS using hardcoded base URL: {hardcoded_base_url} --- ")
-    logging.info(f"--- Starting to send {len(notifications_to_send)} English voice call alerts ---") 
-    for item in notifications_to_send:
-        user = item["user"]
-        message_text = item["message_text"] 
-        
-        encoded_message = urllib.parse.quote(message_text)
-        # Construct full action URL using the hardcoded base_url
-        action_url = f'{hardcoded_base_url}/twilio/handle-voice-alert-response?alert_message={encoded_message}'
-        
-        try:
-            # Construct TwiML dynamically for English
-            response = VoiceResponse()
-            gather = Gather(input='speech', 
-                            action=action_url, # Use the FULL action URL constructed with hardcoded base
-                            method='POST', 
-                            language='en-US', 
-                            speechTimeout='auto',
-                            actionOnEmptyResult=True,
-                            hints="report")
-            gather.say(message_text, voice='Polly.Joanna', language="en-US")
-            response.append(gather)
-            
-            response.say("Processing your response or ending call if none given.", voice='Polly.Joanna', language="en-US")
-            response.hangup()
-            
-            twiml_content = str(response)
-            
-            logging.info(f"  -> Attempting call to {user.phone_number} (User ID: {user.id}) Action URL: {action_url}")
-
-            call = client.calls.create(
-                twiml=twiml_content,
-                to=user.phone_number,
-                from_=twilio_phone_number
-            )
-            logging.info(f"    English Voice call initiated successfully! SID: {call.sid} to {user.phone_number}")
-            successful_calls += 1
-            
-            time.sleep(0.2)
-
-        except Exception as e:
-            logging.error(f"    ERROR initiating English voice call to {user.phone_number}: {e}", exc_info=True) 
-            failed_calls += 1
-            
-    logging.info(f"--- English Voice call initiation complete (Success: {successful_calls}, Failed: {failed_calls}) ---")
-    return {"success": successful_calls, "failed": failed_calls}
 
 # --- Kakao Geocoding Helper --- 
 async def _get_coordinates_from_address(address: str) -> Optional[Dict[str, float]]:
@@ -861,84 +801,216 @@ async def get_shelters(region: str, page: int = 1, rows: int = 10):
 # --- Refactored endpoint for simulating disaster ---
 @api_router.post("/simulate_disaster/", tags=["Disaster"])
 async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Depends(get_db)):
-    """Simulates a disaster alert, filters users, and initiates calls/SMS."""
-    logging.info(f"Simulating disaster: {disaster_alert.MSG_CN} for region {disaster_alert.RCPTN_RGN_NM}")
+    """
+    Simulates a disaster alert scenario:
+    1. Updates disaster coordinates if address provided.
+    2. Filters users based on location proximity.
+    3. Generates user-specific messages (SMS & Voice) considering vulnerability type.
+    4. Handles translation based on user preference.
+    5. Sends notifications directly via Twilio API (SMS map url, SMS alert, Voice call).
+    """
+    logging.info(f"--- STARTING DISASTER SIMULATION --- ")
+    logging.info(f"Received Disaster Alert: SN={disaster_alert.SN}, Type={disaster_alert.DST_SE_NM}, Region={disaster_alert.RCPTN_RGN_NM}")
 
-    # --- 위도/경도 기반 필터링으로 변경 ---
-    users_to_notify = []
-    if disaster_alert.latitude is not None and disaster_alert.longitude is not None:
-        try:
-            # Use location-based filtering
-            users_to_notify = filter_target_users_by_location(
-                db,
-                disaster_lat=disaster_alert.latitude,
-                disaster_lon=disaster_alert.longitude,
-                radius_km=10  # Use a 10km radius
-            )
-            logging.info(f"Filtered {len(users_to_notify)} users based on location (Lat: {disaster_alert.latitude}, Lon: {disaster_alert.longitude}, Radius: 10km).")
-        except Exception as e:
-            logging.error(f"Error during location-based filtering: {e}")
-            # Handle error, perhaps fall back or return an error response
-            raise HTTPException(status_code=500, detail="Error during user filtering.")
+    # --- 1. Geocode Disaster Location (if address available) --- 
+    disaster_lat = disaster_alert.latitude
+    disaster_lon = disaster_alert.longitude
+    if not disaster_lat or not disaster_lon:
+        if disaster_alert.RCPTN_RGN_NM:
+            logging.info(f"Attempting to geocode disaster location: {disaster_alert.RCPTN_RGN_NM}")
+            coordinates = await _get_coordinates_from_address(disaster_alert.RCPTN_RGN_NM)
+            if coordinates:
+                disaster_lat = coordinates.get('latitude')
+                disaster_lon = coordinates.get('longitude')
+                logging.info(f"  > Geocoded disaster location: Lat={disaster_lat}, Lon={disaster_lon}")
+            else:
+                logging.warning(f"  > Could not geocode disaster location address: {disaster_alert.RCPTN_RGN_NM}. Cannot filter by location.")
+        else:
+             logging.warning("Disaster alert has no address and no explicit coordinates. Cannot filter by location.")
+             
+    # Update the disaster_alert object (optional, but good practice)
+    disaster_alert.latitude = disaster_lat
+    disaster_alert.longitude = disaster_lon
+
+    # --- 2. Filter Target Users by Location --- 
+    # Define the radius for notification (e.g., 10 km)
+    notification_radius_km = 10 
+    users_to_notify: List[User] = []
+
+    if disaster_lat is not None and disaster_lon is not None:
+        logging.info(f"Filtering users within {notification_radius_km}km of disaster location ({disaster_lat}, {disaster_lon})")
+        users_to_notify = filter_target_users_by_location(db, disaster_lat, disaster_lon, notification_radius_km)
+        logging.info(f"Found {len(users_to_notify)} users within the radius.")
     else:
-        # Log a warning if coordinates are missing
-        logging.warning(f"Disaster alert data for SN {disaster_alert.SN} lacks latitude/longitude. Cannot filter by location.")
-        # Decide fallback behavior: filter by region name? Notify no one?
-        # For now, notify no one if coordinates are missing.
-        users_to_notify = []
-        # Alternatively, could fall back to region name filtering:
-        # users_to_notify = _filter_target_users(db, disaster_alert.RCPTN_RGN_NM)
-        # logging.info(f"Falling back to region name filtering for {disaster_alert.RCPTN_RGN_NM}. Found {len(users_to_notify)} users.")
+        logging.warning("Disaster location coordinates unknown. Cannot filter users by location. Alerting ALL users.")
+        # Fallback: Get all users if location filtering isn't possible (adjust limit as needed)
+        users_to_notify = get_users(db, limit=500) # Be careful with large numbers
+        logging.info(f"Alerting {len(users_to_notify)} users (fallback: no location filter).")
 
-    # --- 기존 알림 로직 사용 ---
-    if users_to_notify:
-        logging.info(f"Sending notifications to {len(users_to_notify)} users...")
+    if not users_to_notify:
+        logging.warning("No users found to notify. Exiting simulation.")
+        return {"status": "No users to notify", "sms_sent": 0, "sms_failed": 0, "calls_initiated": 0, "calls_failed": 0}
+
+    # Check Twilio config before proceeding
+    if not client or not twilio_phone_number:
+        logging.error("Twilio client not configured. Cannot send notifications.")
+        raise HTTPException(status_code=500, detail="Twilio configuration error, cannot send notifications.")
         
-        # --- 모든 대상자에게 SMS 전송 --- 
-        sms_send_results = {"success": 0, "failed": 0}
-        logging.info("Generating SMS messages for all filtered users...")
-        # Assuming generate_notification_messages exists and returns list of {'to': ..., 'body': ...}
-        sms_notifications = generate_notification_messages(disaster_alert, users_to_notify) # Use users_to_notify
-        logging.info(f"Sending SMS notifications to {len(users_to_notify)} users...")
-        # Assuming send_twilio_notifications exists
-        sms_send_results = send_twilio_notifications(sms_notifications)
-        # ---------------------------------
+    # --- HARDCODED base_url for map and voice response --- 
+    # TODO: Move this to configuration
+    hardcoded_base_url = "https://5eaf-121-160-208-235.ngrok-free.app"
+    # ------------------------------------------------------
+    
+    # --- 3-5. Generate Messages & Send Notifications per User --- 
+    sms_sent_count = 0
+    sms_failed_count = 0
+    calls_initiated_count = 0
+    calls_failed_count = 0
 
-        # --- 전화를 원하는 사용자에게만 음성 통화 추가 전송 ---
-        voice_send_results = {"success": 0, "failed": 0}
-        # Filter users who want voice calls
-        voice_users = [user for user in users_to_notify if user.wants_info_call]
-        logging.info(f"Identified {len(voice_users)} users who want voice calls.")
+    logging.info(f"--- Starting Notification Loop for {len(users_to_notify)} users --- ")
+    
+    for user in users_to_notify:
+        logging.info(f"Processing user: ID={user.id}, Phone={user.phone_number}, Lang={user.preferred_language}, Type={user.vulnerability_type}")
+        
+        # --- Generate Base Korean Messages --- 
+        try:
+            sms_content_ko = generate_notification_messages(disaster_alert, user)
+        except Exception as e_sms_gen:
+            logging.error(f"  ERROR generating SMS content for user {user.id}: {e_sms_gen}", exc_info=True)
+            sms_content_ko = f"[경보] {disaster_alert.DST_SE_NM}. 시스템 오류. 공식 발표 확인." # Fallback
+        
+        try:
+            voice_content_ko = generate_voice_alert_message(disaster_alert, user)
+        except Exception as e_voice_gen:
+            logging.error(f"  ERROR generating Voice content for user {user.id}: {e_voice_gen}", exc_info=True)
+            voice_content_ko = f"[경보] {disaster_alert.DST_SE_NM}. 시스템 오류 발생. 공식 발표를 확인하십시오." # Fallback
+            
+        # --- Handle Translation if needed --- 
+        sms_content_final = sms_content_ko
+        voice_content_final = voice_content_ko
+        tts_code = "ko-KR" # Default TTS code
+        tts_voice = "Polly.Seoyeon"
 
-        if voice_users:
-            logging.info("Generating Voice message text...")
-            # Assuming generate_voice_alert_message exists
-            voice_alert_text = generate_voice_alert_message(disaster_alert)
-            # Prepare data for voice call function
-            voice_notifications = [{"user": user, "message_text": voice_alert_text} for user in voice_users]
-            logging.info(f"Sending additional Voice call notifications to {len(voice_users)} users...")
-            # Assuming send_twilio_voice_alerts exists
-            voice_send_results = send_twilio_voice_alerts(voice_notifications)
-        # -----------------------------------------------------
+        if user.preferred_language == 'en':
+            logging.info(f"  User {user.id} prefers English. Translating messages...")
+            sms_translation = translate_ko_to_en(sms_content_ko)
+            voice_translation = translate_ko_to_en(voice_content_ko)
+            
+            if sms_translation:
+                sms_content_final = sms_translation
+            else:
+                logging.warning(f"  Failed to translate SMS for user {user.id}. Sending in Korean.")
+                
+            if voice_translation:
+                voice_content_final = voice_translation
+                tts_code = "en-US" # Change TTS code for English
+                tts_voice = "Polly.Joanna"
+            else:
+                logging.warning(f"  Failed to translate Voice for user {user.id}. Sending in Korean.")
+        
+        logging.info(f"  Final SMS Content ({user.preferred_language or 'ko'}): {sms_content_final}")
+        logging.info(f"  Final Voice Content ({user.preferred_language or 'ko'}): {voice_content_final}")
+        logging.info(f"  TTS Code: {tts_code}, Voice: {tts_voice}")
+        
+        # --- Send SMS Notifications (Map URL + Alert) --- 
+        full_map_url = f"{hardcoded_base_url}/map/map_api"
+        map_message_body = f"Nearby shelters/safety info: {full_map_url}"
+        
+        try:
+            # 1. Send Map URL SMS
+            logging.info(f"  1 -> Sending MAP URL SMS ({map_message_body}) to {user.phone_number}")
+            message1 = client.messages.create(
+                body=map_message_body,
+                from_=twilio_phone_number,
+                to=user.phone_number
+            )
+            logging.info(f"    Map URL SMS sent! SID: {message1.sid}")
 
-        # Calculate combined results
-        total_sms_sent = sms_send_results.get('success', 0) + sms_send_results.get('failed', 0)
-        total_voice_calls_attempted = len(voice_users)
+            # 2. Send Alert SMS (after brief delay)
+            try:
+                time.sleep(0.5) # Short delay between messages
+                logging.info(f"  2 -> Sending ALERT SMS ({sms_content_final}) to {user.phone_number}")
+                message2 = client.messages.create(
+                    body=sms_content_final,
+                    from_=twilio_phone_number,
+                    to=user.phone_number
+                )
+                logging.info(f"    Alert SMS sent! SID: {message2.sid}")
+                sms_sent_count += 1
+            except Exception as e2:
+                logging.error(f"    ERROR sending ALERT SMS to {user.phone_number} after map URL: {e2}", exc_info=True)
+                sms_failed_count += 1
+                
+        except Exception as e1:
+            logging.error(f"    ERROR sending MAP URL SMS to {user.phone_number}: {e1}", exc_info=True)
+            sms_failed_count += 1 # Count failure if map URL fails (alert won't be sent)
 
-        logging.info(f"Notification results: SMS Success={sms_send_results.get('success', 0)}, SMS Failed={sms_send_results.get('failed', 0)}, Voice Success={voice_send_results.get('success', 0)}, Voice Failed={voice_send_results.get('failed', 0)}")
-        return {
-            "message": f"Disaster simulation initiated for {len(users_to_notify)} users. SMS sent to all. Additional voice calls attempted for {total_voice_calls_attempted}.", 
-            "results": {
-                "total_filtered_users": len(users_to_notify),
-                "sms_success": sms_send_results.get('success', 0),
-                "sms_failed": sms_send_results.get('failed', 0),
-                "voice_success": voice_send_results.get('success', 0),
-                "voice_failed": voice_send_results.get('failed', 0)
-            }
-        }
-    else:
-        logging.info("No users found in the target area based on coordinates.")
-        return {"message": "No users found in the target area based on coordinates. No notifications sent."}
+        # --- Send Voice Call Notification (if user wants it) --- 
+        if user.wants_info_call:
+            logging.info(f"  User {user.id} wants info call. Initiating voice call...")
+            
+            # Construct TwiML dynamically for the voice call
+            encoded_message_for_action = urllib.parse.quote(voice_content_final)
+            action_url = f'{hardcoded_base_url}/twilio/handle-voice-alert-response?alert_message={encoded_message_for_action}&caller={urllib.parse.quote(user.phone_number)}'
+            
+            try:
+                response = VoiceResponse()
+                gather = Gather(input='speech', 
+                                action=action_url, 
+                                method='POST', 
+                                language=tts_code, # Use determined TTS language for speech recognition
+                                speechTimeout='auto',
+                                actionOnEmptyResult=True,
+                                hints="report") # Keep hint simple for now
+                
+                # Say the main alert message with correct voice/language
+                gather.say(voice_content_final, voice=tts_voice, language=tts_code)
+                # Append the fixed reporting prompt (in the SAME language as the main message)
+                report_prompt = " 응답하시려면 '응답'이라고 말씀해주세요." if tts_code == 'ko-KR' else " If you need to report something, please say 'Report' (test prompt - adjust)."
+                gather.say(report_prompt, voice=tts_voice, language=tts_code)
+                
+                response.append(gather)
+                
+                # Fallback message if no input
+                response.say("응답이 없어 통화를 종료합니다." if tts_code == 'ko-KR' else "No response received. Ending call.", voice=tts_voice, language=tts_code)
+                response.hangup()
+                
+                twiml_content = str(response)
+                
+                logging.info(f"  -> Attempting call to {user.phone_number}. Action URL: {action_url}")
+                # logging.debug(f"     Generated TwiML: {twiml_content}") # Log full TwiML only in debug
+
+                call = client.calls.create(
+                    twiml=twiml_content,
+                    to=user.phone_number,
+                    from_=twilio_phone_number
+                )
+                logging.info(f"    Voice call initiated! SID: {call.sid}")
+                calls_initiated_count += 1
+                
+                time.sleep(0.2) # Brief delay between API calls
+
+            except Exception as e_call:
+                logging.error(f"    ERROR initiating voice call to {user.phone_number}: {e_call}", exc_info=True)
+                calls_failed_count += 1
+        else:
+            logging.info(f"  User {user.id} does not want info calls. Skipping voice alert.")
+            
+        # --- End of User Loop --- 
+        
+    logging.info(f"--- Notification Loop COMPLETE --- ")
+    logging.info(f"SMS Sent: {sms_sent_count}, SMS Failed: {sms_failed_count}")
+    logging.info(f"Calls Initiated: {calls_initiated_count}, Calls Failed: {calls_failed_count}")
+    logging.info(f"--- ENDING DISASTER SIMULATION --- ")
+    
+    return {
+        "status": "Simulation complete",
+        "users_targeted": len(users_to_notify),
+        "sms_sent": sms_sent_count,
+        "sms_failed": sms_failed_count,
+        "calls_initiated": calls_initiated_count,
+        "calls_failed": calls_failed_count
+    }
 
 app.include_router(api_router)
 
