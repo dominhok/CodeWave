@@ -114,6 +114,7 @@ templates = Jinja2Templates(directory=templates_dir)
 account_sid = os.getenv('TWILIO_ACCOUNT_SID')
 auth_token = os.getenv('TWILIO_AUTH_TOKEN')
 twilio_phone_number = os.getenv('TWILIO_PHONE_NUMBER')
+emergency_phone_number = os.getenv('EMERGENCY_PHONE_NUMBER') # Load emergency number
 kakao_map_app_key = os.getenv('KAKAO_MAP_APP_KEY')
 safety_data_service_key = os.getenv('SAFETY_DATA_SERVICE_KEY')
 kakao_rest_api_key = os.getenv('KAKAO_REST_API_KEY') # Also load Kakao REST key
@@ -124,6 +125,7 @@ anthropic_api_key = os.getenv('ANTHROPIC_API_KEY') # Also load Anthropic key
 logging.info(f"TWILIO_ACCOUNT_SID loaded: {'Yes' if account_sid else 'No'}")
 logging.info(f"TWILIO_AUTH_TOKEN loaded: {'Yes' if auth_token else 'No'}")
 logging.info(f"TWILIO_PHONE_NUMBER loaded: {'Yes' if twilio_phone_number else 'No'}")
+logging.info(f"EMERGENCY_PHONE_NUMBER loaded: {'Yes' if emergency_phone_number else 'No'}") # Log emergency number load status
 logging.info(f"KAKAO_MAP_APP_KEY loaded: {'Yes' if kakao_map_app_key else 'No'}")
 logging.info(f"KAKAO_REST_API_KEY loaded: {'Yes' if kakao_rest_api_key else 'No'}")
 logging.info(f"SAFETY_DATA_SERVICE_KEY loaded: {'Yes' if safety_data_service_key else 'No'}")
@@ -131,11 +133,16 @@ logging.info(f"UPSTAGE_API_KEY loaded: {'Yes' if upstage_api_key else 'No'}")
 logging.info(f"ANTHROPIC_API_KEY loaded: {'Yes' if anthropic_api_key else 'No'}")
 
 # Check if credentials are loaded
+# Modify check to also include emergency_phone_number if critical
 if not account_sid or not auth_token or not twilio_phone_number:
     # Optionally, you might want to handle this more gracefully
     # depending on whether Twilio functionality is always required.
     print("Warning: Twilio credentials not fully found in .env file. Twilio features may not work.")
     # raise ValueError("Twilio credentials not found in .env file")
+
+# Check if emergency phone number is loaded - log warning if not
+if not emergency_phone_number:
+    logging.warning("EMERGENCY_PHONE_NUMBER not found in .env file. Emergency call feature will be disabled.")
 
 # Initialize client only if credentials exist
 client = None
@@ -1542,13 +1549,35 @@ async def handle_voice_alert_response(request: Request, db: Session = Depends(ge
     
     if report_needed_flag == 1:
         logging.info(f"--> Claude Interpretation: REPORT/ASSISTANCE NEEDED for {caller_phone_number}.")
-        # Update the response message to be more general for assistance requests
-        resp.say("Your request for assistance has been acknowledged. Ending call.", voice='Polly.Joanna', language="en-US")
+        resp.say("Your request has been noted. Relevant authorities will be contacted.", voice='Polly.Joanna', language="en-US") # Modified voice response
         logging.info(f"ACTION NEEDED: User {caller_phone_number} requested report/assistance regarding alert: {original_alert} | Response: {speech_result}")
         print(f"ACTION NEEDED: User {caller_phone_number} requested report/assistance regarding alert: {original_alert} | Response: {speech_result}") 
+
+        # --- Initiate Call to Emergency Number --- 
+        if emergency_phone_number and client and twilio_phone_number:
+            try:
+                # Prepare the message to be spoken on the call
+                spoken_message = f"[코드웨이브 긴급 알림] 사용자 {caller_phone_number} 로부터 지원 요청 또는 신고가 접수되었습니다. 사용자 음성 메시지: {speech_result}"
+                # Create TwiML for the outbound call
+                emergency_call_twiml = VoiceResponse()
+                emergency_call_twiml.say(spoken_message, voice='Polly.Seoyeon', language='ko-KR')
+                emergency_call_twiml.hangup()
+                
+                logging.info(f"  -> Initiating call to EMERGENCY_PHONE_NUMBER ({emergency_phone_number}) from {twilio_phone_number}")
+                emergency_call = client.calls.create(
+                    twiml=str(emergency_call_twiml),
+                    to=emergency_phone_number,
+                    from_=twilio_phone_number
+                )
+                logging.info(f"    Emergency call initiated! SID: {emergency_call.sid}")
+            except Exception as call_err:
+                logging.error(f"    ERROR initiating emergency call to {emergency_phone_number}: {call_err}", exc_info=True)
+        else:
+            logging.warning("Could not initiate emergency call: EMERGENCY_PHONE_NUMBER not configured or Twilio client issue.")
+        # --------------------------------------
+
     else:
         logging.info(f"--> Claude Interpretation: Report/Assistance NOT needed for {caller_phone_number}.")
-        # Keep the original English response for the 'no action needed' case
         resp.say("Okay. Ending call.", voice='Polly.Joanna', language="en-US")
         
     logging.info("Appending Hangup TwiML.")
