@@ -874,96 +874,14 @@ async def specialized_evacuation_manual(request: SpecializedAlertRequest):
     }
 
 
-@api_router.get("/news", tags=["External APIs"])
-async def get_news(location: str, disaster_type: str, items_per_page: int = 20):
-    """
-    네이버 검색 API를 사용하여 위치와 재난 유형에 관련된 뉴스를 검색합니다.
-
-    - location: 검색할 지역 이름 (예: 서울, 부산, 성동구)
-    - disaster_type: 재난 유형 (예: 지진, 홍수, 화재)
-    - items_per_page: 반환할 뉴스 아이템 수 (기본값: 20)
-    """
-    # 네이버 API 키 확인
-    naver_client_id = os.getenv("NAVER_CLIENT_ID")
-    naver_client_secret = os.getenv("NAVER_CLIENT_SECRET")
-
-    if not naver_client_id or not naver_client_secret:
-        raise HTTPException(
-            status_code=500,
-            detail="Naver API credentials not configured. Please set NAVER_CLIENT_ID and NAVER_CLIENT_SECRET in .env file.",
-        )
-
-    # 검색 쿼리 생성 (지역 + 재난 유형)
-    query = f"{location} {disaster_type}"
-    encoded_query = urllib.parse.quote(query)
-
-    # 네이버 뉴스 검색 API URL
-    url = f"https://openapi.naver.com/v1/search/news.json?query={encoded_query}&display={items_per_page}&sort=date"
-
-    # 요청 헤더 설정
-    headers = {
-        "X-Naver-Client-Id": naver_client_id,
-        "X-Naver-Client-Secret": naver_client_secret,
-    }
-
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers, timeout=10.0)
-            response.raise_for_status()  # HTTP 오류 발생시 예외 발생
-
-            data = response.json()
-
-            # 응답 데이터 가공 (HTML 태그 제거)
-            processed_items = []
-            for item in data.get("items", []):
-                processed_item = {
-                    "title": re.sub(
-                        r"<[^>]+>", "", item.get("title", "")
-                    ),  # HTML 태그 제거
-                    "link": item.get("link", ""),
-                    "description": re.sub(
-                        r"<[^>]+>", "", item.get("description", "")
-                    ),  # HTML 태그 제거
-                    "pubDate": item.get("pubDate", ""),
-                }
-                processed_items.append(processed_item)
-
-            return {
-                "query": query,
-                "total": data.get("total", 0),
-                "start": data.get("start", 1),
-                "display": data.get("display", len(processed_items)),
-                "items": processed_items,
-            }
-
-    except httpx.HTTPStatusError as exc:
-        error_msg = f"Error response {exc.response.status_code} from Naver API: {exc.response.text}"
-        print(error_msg)
-        raise HTTPException(
-            status_code=exc.response.status_code, detail="Error from Naver API"
-        )
-
-    except httpx.RequestError as exc:
-        error_msg = f"Error requesting Naver API: {exc}"
-        print(error_msg)
-        raise HTTPException(status_code=502, detail="Failed to connect to Naver API")
-
-    except Exception as e:
-        error_msg = f"Unexpected error processing news request: {e}"
-        print(error_msg)
-        raise HTTPException(
-            status_code=500, detail="Internal server error processing news request"
-        )
-
-
 # Dummy disaster data keyed by ID
 DUMMY_DISASTERS = {
     "earthquake_gangnam": {
         "location": "Gangnam-gu, Seoul",
-        "type": "earthquake",
+        "type": "Large Fire",
         "scale": "Magnitude 4.1",
         "time": "10:30",
-        "coordinates": {"lat": 37.5513455, "lng": 127.0726955},
+        "coordinates": {"lat": 37.5503455, "lng": 127.0726955},
         "radius": 3000,
     },
     "fire_seongdong": {
