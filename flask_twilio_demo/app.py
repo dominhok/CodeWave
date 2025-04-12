@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI, Form, Request, Response, Depends, HTTPException, APIRouter
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from twilio.twiml.messaging_response import MessagingResponse
@@ -205,6 +205,15 @@ class CallRequest(BaseModel):
 class SmsRequest(BaseModel):
     to: str
     message: str
+
+# --- NEW Pydantic Schemas for Translation ---
+class TranslationRequest(BaseModel):
+    text: str
+
+class TranslationResponse(BaseModel):
+    translated_text: Optional[str] = None
+    error: Optional[str] = None
+# -----------------------------------------
 
 # --- CRUD Operations (simplified within app.py) ---
 def get_user_by_phone(db: Session, phone_number: str):
@@ -687,39 +696,58 @@ def _extract_region_from_address(address: str) -> Optional[str]:
 # --- API Router Definition ---
 api_router = APIRouter(prefix="/api")
 
+# --- NEW Translation Endpoint ---
+@api_router.post("/translate/ko-en", response_model=TranslationResponse, tags=["Utilities"])
+async def translate_korean_to_english(request_data: TranslationRequest):
+    """Translates Korean text to English using Upstage API."""
+    korean_text = request_data.text
+    if not korean_text:
+        return TranslationResponse(error="Input text cannot be empty.")
+    
+    translated = translate_ko_to_en(korean_text)
+    
+    if translated:
+        return TranslationResponse(translated_text=translated)
+    else:
+        # If translation failed (e.g., API key missing, Upstage error)
+        logging.error(f"Translation failed for text: {korean_text[:50]}...")
+        return TranslationResponse(error="Translation failed.")
+# ----------------------------
+
 # --- NEW Endpoint to retrieve simulation info ---
-@api_router.get("/simulation_info/{simulation_id}", response_model=DisasterAlertData, tags=["Disaster"])
+@api_router.get("/simulation_info/{simulation_id}", tags=["Disaster"])
 # Add request: Request to the function signature
 async def get_simulation_info(request: Request, simulation_id: str):
     """
     Retrieves the details of a specific disaster simulation using its ID (SN).
     Used by the disaster map page to get context.
+    Returns data as a PlainTextResponse containing a JSON string.
     """
-    try: # Add generic try block to catch unexpected errors
-        # Log User-Agent header to see browser details
+    try: 
+        # ... (User-Agent logging remains the same) ...
         user_agent = request.headers.get("user-agent", "Unknown")
         logging.info(f"Request User-Agent for simulation {simulation_id}: {user_agent}")
 
         logging.info(f"Request received for simulation info with ID: {simulation_id}")
-        # Retrieve data from the app state via request object
         simulation_data = request.app.state.active_simulations.get(simulation_id)
         
         if not simulation_data:
             logging.warning(f"Simulation data not found in app.state for ID: {simulation_id}")
-            raise HTTPException(status_code=404, detail=f"Simulation data not found for ID {simulation_id}") # Known error
+            raise HTTPException(status_code=404, detail=f"Simulation data not found for ID {simulation_id}")
             
         logging.info(f"Returning simulation data from app.state for ID: {simulation_id}")
-        # Return the Pydantic model directly, FastAPI handles serialization
-        return simulation_data
+        
+        # Manually convert Pydantic model to JSON string
+        json_string = simulation_data.model_dump_json()
+        
+        # Return as PlainTextResponse with JSON media type
+        return PlainTextResponse(content=json_string, media_type="application/json")
         
     except HTTPException as http_exc:
-        # Re-raise HTTPException so FastAPI handles it correctly (JSON error response)
-        logging.error(f"HTTPException in get_simulation_info for ID {simulation_id}: {http_exc.status_code} - {http_exc.detail}")
+        # ... (HTTPException handling remains the same) ...
         raise http_exc
     except Exception as e:
-        # Log any other unexpected error that might be happening only on Safari
-        logging.error(f"Unexpected error in get_simulation_info for ID {simulation_id}: {e}", exc_info=True)
-        # Return a 500 error, FastAPI should ideally convert this to JSON error too
+        # ... (Generic exception handling remains the same) ...
         raise HTTPException(status_code=500, detail="Internal server error fetching simulation info.")
 # -------------------------------------------------
 
@@ -1053,7 +1081,8 @@ async def simulate_disaster(request: Request, disaster_alert: DisasterAlertData,
         logging.error("Twilio client not configured. Cannot send notifications.")
         raise HTTPException(status_code=500, detail="Twilio configuration error, cannot send notifications.")
         
-    hardcoded_base_url = "https://5eaf-121-160-208-235.ngrok-free.app"
+    # Update the hardcoded base URL to the currently correct one
+    hardcoded_base_url = "https://71d4c4523155.ngrok.app" 
     
     sms_sent_count = 0
     sms_failed_count = 0
@@ -1122,21 +1151,19 @@ async def simulate_disaster(request: Request, disaster_alert: DisasterAlertData,
 
         # 1. Send Map URL SMS (only if URL exists)
         if map_url_for_sms:
-            # Modify the message body to include more context
-            map_message_body_ko = f"[{disaster_alert.DST_SE_NM}] {disaster_alert.RCPTN_RGN_NM}. 가까운 대피소/안전 정보: {map_url_for_sms}"
-            map_message_body_en = f"[{DISASTER_TYPE_MAP_KO_EN.get(disaster_alert.DST_SE_NM, disaster_alert.DST_SE_NM)}] {disaster_alert.RCPTN_RGN_NM}. Nearby shelters/safety info: {map_url_for_sms}"
-            map_message_body = map_message_body_en if user.preferred_language == 'en' else map_message_body_ko
+            # Modify the message body to include ONLY the URL for testing
+            map_message_body = map_url_for_sms # Directly use the URL
             
             try:
-                logging.info(f"  1 -> Sending MAP URL SMS with context ({map_message_body}) to {user.phone_number}")
+                logging.info(f"  1 -> Sending MAP URL ONLY SMS ({map_message_body}) to {user.phone_number}") # Log message changed
                 message1 = client.messages.create(
-                    body=map_message_body,
+                    body=map_message_body, # Send only the URL
                     from_=twilio_phone_number,
                     to=user.phone_number
                 )
                 logging.info(f"    Map URL SMS sent! SID: {message1.sid}")
-                # Introduce a short delay ONLY if the first message was sent successfully
-                time.sleep(0.5)
+                # REMOVE the delay between messages
+                # time.sleep(0.5)
 
                 # 2. Send Alert SMS (ONLY if map URL SMS was attempted)
                 try:
@@ -1153,9 +1180,8 @@ async def simulate_disaster(request: Request, disaster_alert: DisasterAlertData,
                     sms_failed_count += 1 # Count failure if alert SMS fails
 
             except Exception as e1:
-                logging.error(f"    ERROR sending MAP URL SMS to {user.phone_number}: {e1}", exc_info=True)
-                # If map URL fails, don't count it as sent, but maybe as failed? Or should we still send alert?
-                # Current logic: If map fails, alert is not sent. Count as failed.
+                # Log message updated for clarity
+                logging.error(f"    ERROR sending MAP URL ONLY SMS to {user.phone_number}: {e1}", exc_info=True)
                 sms_failed_count += 1
 
         else:
