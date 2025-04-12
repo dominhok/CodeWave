@@ -44,25 +44,84 @@ function MainPage() {
 
   // 폼 데이터를 관리하는 상태
   const [formData, setFormData] = useState({
-    phone: "",
-    email: "",
-    disability: "",
+    personType: "",
     address: "",
+    phone: "",
+    hasGuardian: false,
+    guardianPhone: "",
+    callRequest: false,
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  // 입력값 변경 핸들러
+  // 입력 값 변경 핸들러
   const handleChange = (e) => {
-    const { name, value } = e.target;
+    const { name, value, type, checked } = e.target;
+
+    setSubmitStatus(null);
+    setErrorMessage('');
+
     setFormData((prevData) => ({
       ...prevData,
-      [name]: value,
+      [name]: type === "checkbox" ? checked : value,
     }));
   };
 
   // 폼 제출 핸들러
-  const handleSubmit = (e) => {
-    e.preventDefault(); // 기본 폼 제출 동작 방지
-    console.log("Submitted Data:", formData); // 콘솔에 데이터 출력
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setSubmitStatus(null);
+    setErrorMessage('');
+
+    const payload = {
+      vulnerability_type: formData.personType,
+      address: formData.address,
+      phone_number: formData.phone,
+      has_guardian: formData.hasGuardian,
+      guardian_phone_number: formData.hasGuardian ? formData.guardianPhone : null,
+      wants_info_call: formData.callRequest,
+    };
+
+    console.log("Sending data to backend:", JSON.stringify(payload, null, 2));
+
+    // Use relative path for fetch when served by the same backend
+    try {
+      const response = await fetch('/api/users/', { // Reverted to relative URL
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Success:', result);
+        setSubmitStatus('success');
+        setFormData({
+          personType: "",
+          address: "",
+          phone: "",
+          hasGuardian: false,
+          guardianPhone: "",
+          callRequest: false,
+        });
+        setTimeout(() => setSubmitStatus(null), 3000);
+      } else {
+        const errorData = await response.json();
+        console.error('Server Error:', errorData);
+        setErrorMessage(errorData.detail || `Error: ${response.status} ${response.statusText}`);
+        setSubmitStatus('error');
+      }
+    } catch (error) {
+      console.error('Network Error:', error);
+      setErrorMessage('Failed to connect to the server. Please try again later.');
+      setSubmitStatus('error');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -102,7 +161,7 @@ function MainPage() {
         <div className="hero-content">
           <h1>Stay Safe, Stay<br />Informed</h1>
           <p>Receive immediate alerts about natural disasters near you.<br />We help you stay safe and informed.</p>
-          <button className="cta-button" onClick={scrollToSection}>Contact Us</button>
+          <button className="cta-button" onClick={() => scrollToSection(contactSectionRef)}>Contact Us</button>
         </div>
       </div>
 
@@ -131,7 +190,7 @@ function MainPage() {
               <p>
                 Real-time alerts and precise location tracking offer unparalleled safety during critical moments of natural disasters.
               </p>
-              <button className="info-button" onClick={scrollToSection}>Contact Us</button>
+              <button className="info-button" onClick={() => scrollToSection(contactSectionRef)}>Contact Us</button>
             </div>
           </div>
         </div>
@@ -168,84 +227,101 @@ function MainPage() {
 
       <section ref={contactSectionRef} className="contact-section">
         <div className="contact-container">
-          {/* 왼쪽 입력 폼 */}
           <div className="input-section">
             <h1>Contact Us</h1>
             <form className="contact-form" onSubmit={handleSubmit}>
-              {/* 전화번호 입력 */}
               <div className="form-group">
-                <label htmlFor="phone">Phone Number</label>
-                <div className="phone-input">
-                  <select
-                    id="country-code"
-                    name="phone"
-                    value={formData.phone}
-                    onChange={handleChange}
-                  >
-                    <option value="+82">South Korea (+82)</option>
-                    <option value="+1">United States (+1)</option>
-                  </select>
-                  <input
-                    type="tel"
-                    id="phone"
-                    name="phone"
-                    placeholder="Enter your phone number"
-                    required
-                    onChange={handleChange}
-                  />
-                </div>
+                <label htmlFor="personType">Who are you?</label>
+                <select
+                  id="personType"
+                  name="personType"
+                  value={formData.personType}
+                  onChange={handleChange}
+                  required
+                >
+                  <option value="" disabled selected>Select your situation</option>
+                  <option value="elderly">Elderly / Living Alone / Pregnant / Guardian of Infant / Mobility Issues</option>
+                  <option value="visual">Visually Impaired</option>
+                  <option value="hearing">Hearing Impaired</option>
+                  <option value="foreigner">Foreigner / Refugee</option>
+                  <option value="other">Other</option>
+                </select>
               </div>
 
-              {/* 이메일 입력 */}
               <div className="form-group">
-                <label htmlFor="email">Email</label>
+                <label htmlFor="address">Address</label>
                 <input
-                  type="email"
-                  id="email"
-                  name="email"
-                  placeholder="Enter your email"
-                  value={formData.email}
+                  type="text"
+                  id="address"
+                  name="address"
+                  placeholder="Enter your full residential address"
+                  value={formData.address}
                   onChange={handleChange}
                   required
                 />
               </div>
 
-              {/* 장애 여부 선택 */}
               <div className="form-group">
-                <label htmlFor="disability">Disability Status</label>
-                <select
-                  id="disability"
-                  name="disability"
-                  value={formData.disability}
-                  onChange={handleChange}
-                >
-                  <option value="">Select an option</option>
-                  <option value="visual">Visual Impairment</option>
-                  <option value="hearing">Hearing Impairment</option>
-                  <option value="mobility">Mobility Difficulty</option>
-                </select>
-              </div>
-
-              {/* 집 주소 입력 */}
-              <div className="form-group">
-                <label htmlFor="address">Home Address</label>
-                <textarea
-                  id="address"
-                  name="address"
-                  rows="3"
-                  placeholder="Enter your full address"
-                  value={formData.address}
+                <label htmlFor="phone">Phone Number (International)</label>
+                <input
+                  type="tel"
+                  id="phone"
+                  name="phone"
+                  placeholder="e.g., +82 10-1234-5678"
+                  value={formData.phone}
                   onChange={handleChange}
                   required
-                ></textarea>
+                />
               </div>
 
-              {/* 제출 버튼 */}
-              <button type="submit">Submit &gt;&gt;</button>
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    name="hasGuardian"
+                    checked={formData.hasGuardian}
+                    onChange={handleChange}
+                  />
+                  &nbsp;I would like to connect a guardian
+                </label>
+                {formData.hasGuardian && (
+                  <input
+                    type="tel"
+                    name="guardianPhone"
+                    placeholder="Guardian's phone number (e.g., +82 10-0000-0000)"
+                    value={formData.guardianPhone}
+                    onChange={handleChange}
+                    className="guardian-phone"
+                    required
+                  />
+                )}
+              </div>
+
+              <div className="form-group">
+                <label>
+                  <input
+                    type="checkbox"
+                    name="callRequest"
+                    checked={formData.callRequest}
+                    onChange={handleChange}
+                  />
+                  &nbsp;I would like to receive guidance calls
+                </label>
+              </div>
+
+              <button type="submit" className="submit-button" disabled={isSubmitting}>
+                {isSubmitting ? 'Submitting...' : 'Submit Information'}
+              </button>
+
+              {submitStatus === 'success' && (
+                <p className="success-message">Information submitted successfully!</p>
+              )}
+              {submitStatus === 'error' && (
+                <p className="error-message">{errorMessage}</p>
+              )}
             </form>
           </div>
 
-          {/* 오른쪽 이미지 영역 */}
           <div className="image-section">
             <img src={contact} alt="Contact Us" />
           </div>
@@ -254,12 +330,10 @@ function MainPage() {
 
       <footer className="footer-section">
         <div className="footer-container">
-          {/* 왼쪽 영역 */}
           <div className="footer-left">
             <h3>Code Wave</h3>
           </div>
 
-          {/* 오른쪽 영역 */}
           <div className="footer-right">
             <ul>
               <li>
@@ -275,8 +349,8 @@ function MainPage() {
         </div>
       </footer>
 
-  </div>
+    </div>
   );
 }
-//           <img src={gpsImage} alt="Contact Us"/>
+
 export default MainPage;
