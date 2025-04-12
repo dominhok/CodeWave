@@ -89,5 +89,8 @@ test_venv/
 # Exclude video files in frontend
 frontend/**/*.mp4
 
+# Media files in flask_twilio_demo
+flask_twilio_demo/*.mp4
+
 # Add any other rules or changes here
 # ... 

@@ -16,6 +16,8 @@ import pathlib
 import httpx
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import logging
+import time # time 모듈 임포트
 
 from . import models
 from .models import Base, engine, User, get_db
@@ -28,6 +30,9 @@ from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_community.document_loaders import DirectoryLoader # Using community loader
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 load_dotenv() # Load environment variables from .env file
 
@@ -85,6 +90,10 @@ twilio_phone_number = os.getenv('TWILIO_PHONE_NUMBER')
 kakao_map_app_key = os.getenv('KAKAO_MAP_APP_KEY')
 safety_data_service_key = os.getenv('SAFETY_DATA_SERVICE_KEY')
 
+logging.info(f"TWILIO_ACCOUNT_SID: {account_sid}")
+logging.info(f"auth_token: {'*' * len(auth_token) if auth_token else None}") # 토큰은 로그에 직접 노출하지 않도록 처리
+logging.info(f"TWILIO_PHONE_NUMBER: {twilio_phone_number}")
+
 # Check if credentials are loaded
 if not account_sid or not auth_token or not twilio_phone_number:
     # Optionally, you might want to handle this more gracefully
@@ -95,7 +104,13 @@ if not account_sid or not auth_token or not twilio_phone_number:
 # Initialize client only if credentials exist
 client = None
 if account_sid and auth_token:
-    client = Client(account_sid, auth_token)
+    try:
+        client = Client(account_sid, auth_token)
+        logging.info("Twilio client initialized successfully.")
+    except Exception as e:
+        logging.error(f"Failed to initialize Twilio client: {e}")
+else:
+    logging.warning("Twilio credentials (account_sid or auth_token) not found in environment variables.")
 
 # --- Pydantic Schemas ---
 class UserBase(BaseModel):
@@ -177,38 +192,51 @@ def filter_target_users(disaster_alert: DisasterAlertData, db: Session) -> List[
         
     return filtered_users
 
-# --- RAG Based Message Generation (Updated Prompt) ---
+# --- RAG Based Message Generation (Target Length ~60, No URL, No Ellipsis) ---
 def generate_notification_messages(disaster_alert: DisasterAlertData, users: List[User]) -> List[dict]:
-    """Generates structured notification messages using RAG based on rag.py example."""
+    """Generates structured notification messages using RAG, targeting ~60 chars, without URL or ellipsis on truncation."""
     notifications = []
-    base_alert = f"[긴급] {disaster_alert.RCPTN_RGN_NM} {disaster_alert.DST_SE_NM} 발생 ({disaster_alert.EMRG_STEP_NM}). 내용: {disaster_alert.MSG_CN}"
-    print(f"Base Alert Message: {base_alert}")
+    # Base alert in English, formatted concisely
+    base_alert_info = f"{disaster_alert.DST_SE_NM} in {disaster_alert.RCPTN_RGN_NM}"
+    print(f"Base Alert Info for RAG query: {base_alert_info}")
+
+    # Adjust target length for RAG - VERY Short target
+    target_rag_len = 60 
+    total_max_len = 70 # Ensure total length doesn't exceed this
 
     rag_response_content = "" # Initialize with empty string
     if vectorstore is None:
         print("  WARNING: Vectorstore not available. Cannot generate RAG content.")
-        rag_response_content = "\n\n[대처방안] 현재 관련 정보를 조회할 수 없습니다."
+        # Fallback message (no URL)
+        fallback_base = f"ALERT: {base_alert_info}. Follow local guidance."
+        if len(fallback_base) > total_max_len: # Check against total max (70)
+             # Hard truncate, no ellipsis
+             rag_response_content = fallback_base[:total_max_len]
+        else:
+             rag_response_content = fallback_base
+
     else:
         try:
             upstage_api_key = os.getenv("UPSTAGE_API_KEY")
             llm = ChatUpstage(api_key=upstage_api_key, model="solar-pro")
             retriever = vectorstore.as_retriever()
 
-            # --- Use Prompt Template similar to rag.py card_template --- 
-            prompt_template = """
-            다음 문서를 기반으로 아래 질문에 대한 '재난 대응 요약'을 작성해 주세요. 응답은 한국어로 작성하고, 핵심적인 내용만 간결하게 포함하세요.
+            # --- Updated English Prompt (Targeting ~60 chars, EXTREME brevity) --- 
+            prompt_template = f"""
+            Generate an EXTREMELY concise emergency alert message in ENGLISH, strictly aiming for {target_rag_len} characters or less.
 
-            문서:
-            {context}
+            Required Information (must be included):
+            1. Disaster Type: [from {{question}}]
+            2. Location: [from {{question}}]
+            3. 1 brief CRITICAL immediate action.
 
-            질문: {question}
+            Context Documents (for action guidance):
+            {{context}}
 
-            응답 형식:
-            [핵심 대응 지침]
-            - 
-            - 
-            [주의사항]
-            - 
+            Output ONLY the SMS-ready alert text. ABSOLUTELY NO EXTRA TEXT. BE EXTREMELY BRIEF.
+            Example: "ALERT: Earthquake Seoul Seongdong-gu. Drop, Cover, Hold On."
+
+            Alert Message (target ~{target_rag_len} chars):
             """
             PROMPT = PromptTemplate(
                 template=prompt_template, input_variables=["context", "question"]
@@ -222,59 +250,111 @@ def generate_notification_messages(disaster_alert: DisasterAlertData, users: Lis
                 return_source_documents=False
             )
             
-            # Formulate query based on disaster details
-            query = f"{disaster_alert.DST_SE_NM} 발생 시 ({disaster_alert.RCPTN_RGN_NM} 상황), 주요 대응 지침과 주의사항은?"
+            query = base_alert_info
             print(f"  RAG Query: {query}")
             
             result = qa_chain.invoke({"query": query})
-            rag_summary_text = result.get('result', '대응 방안 생성 실패').strip()
+            rag_summary_text = result.get('result', '').strip()
             
-            print(f"  RAG Generated Response:\n{rag_summary_text}")
-            # Prepend a title to the generated content
-            rag_response_content = f"\n\n--- 재난 대응 요약 ---\n{rag_summary_text}"
+            print(f"  RAG Generated Response (raw):\n{rag_summary_text}")
+
+            # --- Simplified Truncation Logic (NO ELLIPSIS) --- 
+            if not rag_summary_text: # If RAG failed or returned empty
+                print("  WARNING: RAG generation resulted in empty string. Using fallback.")
+                fallback_base = f"ALERT: {base_alert_info}. Check official sources."
+                if len(fallback_base) > total_max_len: # Check against total max (70)
+                     # Hard truncate, no ellipsis
+                     rag_response_content = fallback_base[:total_max_len]
+                else:
+                     rag_response_content = fallback_base
+            else:
+                # Use the generated text directly
+                rag_response_content = rag_summary_text
+                
+                # Final hard check to ensure total length doesn't exceed absolute max (70)
+                if len(rag_response_content) > total_max_len:
+                     print(f"  WARNING: Final message still exceeds {total_max_len} chars. Force truncating (hard cut). Len: {len(rag_response_content)}")
+                     rag_response_content = rag_response_content[:total_max_len]
 
         except Exception as e:
             print(f"  ERROR during RAG generation: {e}")
-            rag_response_content = "\n\n[대처방안] 관련 정보를 조회하는 중 오류가 발생했습니다."
-    # --- End RAG Generation ---
+            # Fallback message on error (no URL)
+            fallback_base = f"ALERT: {base_alert_info}. Error getting details. Follow local guidance."
+            if len(fallback_base) > total_max_len: # Check against total max (70)
+                 # Hard truncate, no ellipsis
+                 rag_response_content = fallback_base[:total_max_len]
+            else:
+                 rag_response_content = fallback_base
+
+    # --- End RAG Generation --- 
+
+    # Log the final generated message content and its length 
+    logging.info(f"Final generated message content (Alert only, ~60 chars, no ellipsis):\n{rag_response_content}")
+    logging.info(f"---> Final Alert message length: {len(rag_response_content)} chars")
 
     for user in users:
-        # Combine base alert with RAG response
-        # TODO: Personalize further based on user.vulnerability_type if needed
-        user_specific_message = f"{base_alert}{rag_response_content}"
-        notifications.append({"user": user, "message": user_specific_message})
+        # Message content no longer includes the URL here
+        notifications.append({"user": user, "message": rag_response_content})
         
     return notifications
 
 def send_twilio_notifications(notifications_to_send: List[dict]) -> dict:
-    """Sends notifications via Twilio SMS and returns counts."""
+    """Sends notifications via Twilio SMS (map URL first, then alert with delay) and returns counts."""
     successful_notifications = 0
     failed_notifications = 0
     
-    # Check Twilio config globally first (or pass client/number as args)
+    # Check Twilio config
     if not client or not twilio_phone_number:
         print("  ERROR: Twilio client not configured. Cannot send SMS.")
+        logging.error("Twilio client not configured. Cannot send SMS.") 
         return {"success": successful_notifications, "failed": len(notifications_to_send)} 
 
-    print("--- SENDING REAL TWILIO NOTIFICATIONS --- ")
+    # Construct the map URL message (needs base_url)
+    # TODO: Get base URL from environment variable or config for flexibility
+    base_url = "https://ff74-121-160-208-235.ngrok-free.app" 
+    full_map_url = f"{base_url}/map/map_api"
+    map_message_body = f"Nearby shelters/safety info: {full_map_url}" # Slightly shortened prefix
+
+    print("--- SENDING REAL TWILIO NOTIFICATIONS (2-Step: Map URL + Alert) --- ")
+    logging.info("--- Starting to send real Twilio notifications (Map URL + Alert) ---") 
     for item in notifications_to_send:
         user = item["user"]
-        message_body = item["message"]
+        alert_message_body = item["message"] # This is the shorter alert message generated by RAG
         
-        print(f"  -> Attempting to send SMS to {user.phone_number} (User ID: {user.id}) with message: {message_body[:50]}...")
         try:
-            message = client.messages.create(
-                body=message_body,
+            # 1. Send the MAP URL SMS first
+            logging.info(f"  1 -> Attempting to send MAP URL SMS to {user.phone_number} (User ID: {user.id})")
+            message1 = client.messages.create(
+                body=map_message_body,
                 from_=twilio_phone_number,
                 to=user.phone_number
             )
-            print(f"    SMS sent successfully! SID: {message.sid}")
-            successful_notifications += 1
-        except Exception as e:
-            print(f"    ERROR sending Twilio SMS to {user.phone_number}: {e}")
-            failed_notifications += 1
+            logging.info(f"    Map URL SMS sent successfully! SID: {message1.sid} to {user.phone_number}")
+
+            # 2. If map URL SMS was successful, wait briefly and send the main alert message
+            try:
+                logging.info(f"  ... Waiting 0.5 seconds before sending alert SMS ...")
+                time.sleep(0.5) # 0.5초 지연 추가
+                
+                logging.info(f"  2 -> Attempting to send ALERT SMS to {user.phone_number} (User ID: {user.id}). Content:\n{alert_message_body}")
+                message2 = client.messages.create(
+                    body=alert_message_body,
+                    from_=twilio_phone_number,
+                    to=user.phone_number
+                )
+                logging.info(f"    Alert SMS sent successfully! SID: {message2.sid} to {user.phone_number}")
+                successful_notifications += 1 # Count success only if both messages are sent
+                
+            except Exception as e2:
+                logging.error(f"    ERROR sending ALERT SMS to {user.phone_number} after successful map URL: {e2}", exc_info=True) 
+                failed_notifications += 1 # Map URL sent, but alert failed
+
+        except Exception as e1:
+            # This now represents failure sending the MAP URL
+            logging.error(f"    ERROR sending MAP URL SMS to {user.phone_number}: {e1}", exc_info=True) 
+            failed_notifications += 1 # Map URL failed, didn't attempt alert
             
-    print(f"--- NOTIFICATION SENDING COMPLETE (Success: {successful_notifications}, Failed: {failed_notifications}) --- ")
+    logging.info(f"--- Notification sending complete (Success pairs: {successful_notifications}, Failed attempts: {failed_notifications}) ---")
     return {"success": successful_notifications, "failed": failed_notifications}
 
 # --- FastAPI Endpoints ---
