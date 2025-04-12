@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 import uvicorn
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict
 import pathlib
 import httpx
 from sqlalchemy import create_engine
@@ -19,6 +19,10 @@ from sqlalchemy.orm import sessionmaker
 import logging
 import time # time 모듈 임포트
 import urllib.parse # URL 인코딩을 위해 임포트
+from datetime import datetime
+import re # Import regex module
+import math
+from math import radians, cos, sin, asin, sqrt # Import math functions for Haversine
 
 from . import models
 from .models import Base, engine, User, get_db
@@ -123,31 +127,35 @@ else:
 # --- Pydantic Schemas ---
 class UserBase(BaseModel):
     vulnerability_type: str
-    address: str
+    address: Optional[str] = None
     phone_number: str
     has_guardian: bool = False
     guardian_phone_number: Optional[str] = None
     wants_info_call: bool = True
-    is_visually_impaired: bool = False
 
 class UserCreate(UserBase):
     pass # Inherits all fields from UserBase
 
 class UserResponse(UserBase):
     id: int
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    last_voice_response: Optional[str] = None # Add field to response
+    last_response_timestamp: Optional[datetime] = None # Add field to response
 
     class Config:
         from_attributes = True # Changed from orm_mode = True for Pydantic v2
 
-class CallRequest(BaseModel):
-    to: str
-    message: str
+# New schema for detailed user response including last response
+class UserResponseWithDetails(UserResponse):
+    pass # Inherits all fields including the ones added to UserResponse
 
-class SmsRequest(BaseModel):
-    to: str
-    message: str
+# New schema for dashboard summary
+class RegionSummary(BaseModel):
+    region_name: str
+    summary: str
 
-# --- NEW: Pydantic model based on Real Disaster API Output ---
+# --- Disaster Alert Data Schema (Re-added) ---
 class DisasterAlertData(BaseModel):
     SN: str             # 일련번호
     CRT_DT: str         # 생성일시 (문자열로 받음, 필요시 파싱)
@@ -157,7 +165,16 @@ class DisasterAlertData(BaseModel):
     DST_SE_NM: str      # 재해구분명
     REG_YMD: Optional[str] = None      # 등록일자 (선택적)
     MDFCN_YMD: Optional[str] = None    # 수정일자 (선택적)
-    
+    latitude: Optional[float] = None    # 위도 추가
+    longitude: Optional[float] = None    # 경도 추가
+
+class CallRequest(BaseModel):
+    to: str
+
+class SmsRequest(BaseModel):
+    to: str
+    message: str
+
 # --- CRUD Operations (simplified within app.py) ---
 def get_user_by_phone(db: Session, phone_number: str):
     return db.query(User).filter(User.phone_number == phone_number).first()
@@ -165,54 +182,46 @@ def get_user_by_phone(db: Session, phone_number: str):
 def get_users(db: Session, skip: int = 0, limit: int = 100):
     return db.query(User).offset(skip).limit(limit).all()
 
-def create_user(db: Session, user: UserCreate):
-    db_user = User(**user.model_dump()) # Use model_dump() for Pydantic v2
+# Modified create_user to accept and store coordinates
+def create_user(db: Session, user_data: Dict):
+    db_user = User(**user_data)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
     return db_user
 
-# --- Helper Functions for Disaster Simulation Logic ---
+# --- Haversine Calculation --- 
+def haversine(lat1, lon1, lat2, lon2):
+    """Calculate the great-circle distance between two points on the earth."""
+    # Convert decimal degrees to radians
+    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
 
-def filter_target_users(disaster_alert: DisasterAlertData, db: Session) -> List[User]:
-    """Filters users based on the disaster reception region."""
-    target_location_keyword = None
-    if disaster_alert.RCPTN_RGN_NM:
-        parts = disaster_alert.RCPTN_RGN_NM.split()
-        if len(parts) > 1:
-            target_location_keyword = parts[-1]
-            if '전체' in target_location_keyword or ',' in disaster_alert.RCPTN_RGN_NM:
-                target_location_keyword = parts[0]
+    # Haversine formula
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    r = 6371 # Radius of earth in kilometers. Use 3956 for miles
+    return c * r
+
+# --- User Filtering by Location --- 
+def filter_target_users_by_location(db: Session, disaster_lat: float, disaster_lon: float, radius_km: int):
+    """Filters users within a given radius from a disaster location."""
+    users = db.query(User).all()
+    target_users = []
+    for user in users:
+        if user.latitude is not None and user.longitude is not None:
+            try:
+                distance = haversine(disaster_lat, disaster_lon, user.latitude, user.longitude)
+                if distance <= radius_km:
+                    target_users.append(user)
+            except ValueError as e:
+                # Log potential math domain errors (e.g., from invalid coordinates)
+                logging.error(f"Haversine calculation error for user {user.id}: {e}")
         else:
-            target_location_keyword = disaster_alert.RCPTN_RGN_NM
-    
-    filtered_users = []
-    if target_location_keyword:
-        print(f"Filtering users in location containing: '{target_location_keyword}'")
-        try:
-            # Select only necessary columns explicitly to avoid schema mismatch errors
-            query_result = db.query(
-                User.id, 
-                User.phone_number, 
-                User.wants_info_call, 
-                User.address # Keep address if needed elsewhere, or remove
-                # We don't strictly NEED is_visually_impaired for the current logic flow after this point
-            ).filter(User.address.contains(target_location_keyword)).all()
-            
-            # Reconstruct User objects (or adapt downstream code to use tuples)
-            # For simplicity, let's reconstruct partial User objects needed for separation
-            filtered_users = [
-                User(id=row.id, phone_number=row.phone_number, wants_info_call=row.wants_info_call, address=row.address) 
-                for row in query_result
-            ]
-            print(f"Found {len(filtered_users)} users to notify (selected specific columns).")
-        except Exception as e:
-            print(f"Error filtering users: {e}")
-            return [] 
-    else:
-        print("No location keyword to filter by from RCPTN_RGN_NM.")
-        
-    return filtered_users
+            # Log users skipped due to missing coordinates
+            logging.warning(f"User {user.id} skipped due to missing coordinates (lat={user.latitude}, lon={user.longitude}).")
+    return target_users
 
 # --- RAG Based Message Generation (Target Length ~60, No URL, No Ellipsis) ---
 def generate_notification_messages(disaster_alert: DisasterAlertData, users: List[User]) -> List[dict]:
@@ -552,20 +561,153 @@ def send_twilio_voice_alerts(notifications_to_send: List[dict]) -> dict:
     logging.info(f"--- English Voice call initiation complete (Success: {successful_calls}, Failed: {failed_calls}) ---")
     return {"success": successful_calls, "failed": failed_calls}
 
-# --- FastAPI Endpoints ---
+# --- Kakao Geocoding Helper --- 
+async def _get_coordinates_from_address(address: str) -> Optional[Dict[str, float]]:
+    """Calls Kakao Geocoding API to get latitude and longitude from an address."""
+    kakao_rest_api_key = os.getenv('KAKAO_REST_API_KEY') # Use the correct env var name
+    if not kakao_rest_api_key or not address:
+        logging.warning("Kakao REST API Key not found or address is empty. Skipping geocoding.")
+        return None
 
-# Prefixing API routes for better organization
+    geocoding_url = "https://dapi.kakao.com/v2/local/search/address.json"
+    headers = {"Authorization": f"KakaoAK {kakao_rest_api_key}"}
+    params = {"query": address}
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(geocoding_url, headers=headers, params=params)
+            response.raise_for_status() # Raise exception for bad status codes
+            data = response.json()
+            
+            if data.get('documents'):
+                # Get coordinates from the first result
+                coords = data['documents'][0]['address']
+                lat = float(coords.get('y'))
+                lon = float(coords.get('x'))
+                logging.info(f"Geocoding success for '{address}': lat={lat}, lon={lon}")
+                return {"latitude": lat, "longitude": lon}
+            else:
+                logging.warning(f"Geocoding failed for '{address}': No results found.")
+                return None
+        except httpx.RequestError as exc:
+            logging.error(f"An error occurred while requesting Kakao Geocoding API: {exc}")
+            return None
+        except httpx.HTTPStatusError as exc:
+            logging.error(f"Kakao Geocoding API returned an error: {exc.response.status_code} - {exc.response.text}")
+            return None
+        except (KeyError, IndexError, ValueError) as e:
+            logging.error(f"Error parsing Kakao Geocoding API response: {e}")
+            return None
+
+# --- Helper function to extract region --- 
+def _extract_region_from_address(address: str) -> Optional[str]:
+    """Attempts to extract a '구' or '시' name from the address string."""
+    if not address:
+        return None
+    # Simple extraction based on '구' or '시' - might need refinement
+    parts = address.split()
+    for part in parts:
+        if part.endswith('구'):
+            # Handle cases like '서울특별시' -> '서울시' (consistency)
+            city_part = parts[0] if parts else ""
+            if city_part.endswith('시') and city_part != part:
+                 # e.g., 서울특별시 성동구 -> 서울시 성동구
+                return f"{city_part} {part}" 
+            return part # e.g., 성동구
+        elif part.endswith('시') and len(parts) > 1 and parts[parts.index(part)+1].endswith('구'):
+             # Handles cases where city name comes before gu directly, like '서울시 성동구' if already formatted
+             continue # Let the '구' part handle this
+        elif part.endswith('시'): 
+            # If only city is available or it's the most specific part
+            return part # e.g., 수원시 
+    return None # Could not extract a region
+
+# --- API Router Definition ---
 api_router = APIRouter(prefix="/api")
 
+# --- Dashboard Endpoint --- 
+@api_router.get("/dashboard/summary", response_model=List[RegionSummary], tags=["Dashboard"])
+def get_dashboard_summary(request: Request, db: Session = Depends(get_db)):
+    """Provides a summary of user responses clustered by region."""
+    users = get_users(db) # Get all users
+    
+    region_responses: Dict[str, List[str]] = {}
+    
+    # 1. Group responses by region
+    for user in users:
+        if user.address and user.last_voice_response:
+            region = _extract_region_from_address(user.address)
+            if region:
+                # Add non-empty responses
+                response_text = user.last_voice_response.strip()
+                if response_text: # Only add if there's actual text
+                    region_responses.setdefault(region, []).append(response_text)
+
+    summaries: List[RegionSummary] = []
+    
+    # Access chat model from app state
+    chat_model = getattr(request.app.state, 'chat_model', None)
+    
+    if not chat_model:
+        logging.error("Chat model not available from app state for summarization.")
+        # Return empty list or raise error, depending on desired behavior
+        return [] 
+
+    # 2. Summarize responses for each region
+    for region, responses in region_responses.items():
+        if not responses: # Skip if no valid responses for the region
+            continue
+            
+        # Combine responses into a context string
+        context = "\n".join([f"- {res}" for res in responses])
+        
+        # Create prompt for summarization
+        prompt = f"다음은 [{region}] 지역 사용자들의 최근 보고 내용입니다. 이 내용을 바탕으로 해당 지역의 현재 상황을 한국어로 간결하게 요약해주세요.:\n\n{context}"
+        
+        try:
+            # Call the Upstage LLM
+            logging.info(f"Generating summary for region: {region}")
+            llm_response = chat_model.invoke(prompt)
+            # Ensure the response content is a string
+            summary_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+            logging.info(f"Generated summary: {summary_text}")
+            
+            summaries.append(RegionSummary(region_name=region, summary=summary_text))
+            
+        except Exception as e:
+            logging.error(f"Error generating summary for region {region}: {e}", exc_info=True)
+            # Optionally add a placeholder summary or skip the region
+            summaries.append(RegionSummary(region_name=region, summary="요약 생성 중 오류 발생"))
+            
+    return summaries
+
+# --- User Endpoints --- 
 @api_router.post("/users/", response_model=UserResponse, tags=["Users"])
-def create_user_endpoint(user: UserCreate, db: Session = Depends(get_db)):
+async def create_user_endpoint(user: UserCreate, db: Session = Depends(get_db)):
     db_user = get_user_by_phone(db, phone_number=user.phone_number)
     if db_user:
         raise HTTPException(status_code=400, detail="Phone number already registered")
-    # DEBUG: Print received data before creating
-    print("Received user data in endpoint:", user.model_dump())
+    
+    # --- Geocode Address --- 
+    latitude = None
+    longitude = None
+    if user.address:
+        coordinates = await _get_coordinates_from_address(user.address)
+        if coordinates:
+            latitude = coordinates.get('latitude')
+            longitude = coordinates.get('longitude')
+    # -----------------------
+
+    # Prepare data for DB creation
+    user_data_dict = user.model_dump()
+    user_data_dict['latitude'] = latitude
+    user_data_dict['longitude'] = longitude
+    
+    print("Creating user with data:", user_data_dict)
+    
     try:
-        created_user = create_user(db=db, user=user)
+        # Pass the dictionary including coordinates to create_user
+        created_user = create_user(db=db, user_data=user_data_dict)
         print(f"Successfully created user with ID: {created_user.id}")
         return created_user
     except Exception as e:
@@ -585,6 +727,12 @@ def read_user_endpoint(phone_number: str, db: Session = Depends(get_db)):
     if db_user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return db_user
+
+# New endpoint to get all users with their last response details
+@api_router.get("/users/with_details", response_model=List[UserResponseWithDetails], tags=["Users"])
+def read_users_with_details_endpoint(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    users = get_users(db, skip=skip, limit=limit)
+    return users
 
 @api_router.post("/send_sms", tags=["Twilio"])
 async def send_sms(sms_request: SmsRequest):
@@ -651,74 +799,86 @@ async def get_shelters(region: str, page: int = 1, rows: int = 10):
             raise HTTPException(status_code=500, detail="An internal error occurred while fetching shelter data")
 
 # --- Refactored endpoint for simulating disaster ---
-@api_router.post("/simulate_disaster", tags=["Disaster Simulation"])
+@api_router.post("/simulate_disaster/", tags=["Disaster"])
 async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Depends(get_db)):
-    print("\n--- STARTING DISASTER SIMULATION (Refactored) ---")
-    print(f"Received Alert SN: {disaster_alert.SN} for Region: {disaster_alert.RCPTN_RGN_NM}")
-    
-    # 1. Filter users based on location
-    users_to_notify = filter_target_users(disaster_alert, db)
-    
-    # --- Separate users by notification type (Based on wants_info_call only) --- 
-    sms_users = []
-    voice_users = []
-    print("Separating users based on wants_info_call preference:")
-    for user in users_to_notify:
-        # Voice call if user wants the call
-        if user.wants_info_call:
-            voice_users.append(user)
-            print(f"  - User {user.id} ({user.phone_number}): Wants info call -> VOICE")
-        # Otherwise, send SMS
-        else:
-            sms_users.append(user)
-            print(f"  - User {user.id} ({user.phone_number}): Does NOT want info call -> SMS")
-                
-    print(f"Separation complete: {len(sms_users)} for SMS, {len(voice_users)} for Voice Call")
-    # ----------------------------------------------------------------------------
-    
-    # 2. Generate messages (adapt for SMS/Voice)
-    # Generate SMS messages for users who don't want calls
-    sms_notifications = []
-    if sms_users:
-        print("Generating SMS messages...")
-        sms_notifications = generate_notification_messages(disaster_alert, sms_users)
+    """Simulates a disaster alert, filters users, and initiates calls/SMS."""
+    logging.info(f"Simulating disaster: {disaster_alert.MSG_CN} for region {disaster_alert.RCPTN_RGN_NM}")
+
+    # --- 위도/경도 기반 필터링으로 변경 ---
+    users_to_notify = []
+    if disaster_alert.latitude is not None and disaster_alert.longitude is not None:
+        try:
+            # Use location-based filtering
+            users_to_notify = filter_target_users_by_location(
+                db,
+                disaster_lat=disaster_alert.latitude,
+                disaster_lon=disaster_alert.longitude,
+                radius_km=10  # Use a 10km radius
+            )
+            logging.info(f"Filtered {len(users_to_notify)} users based on location (Lat: {disaster_alert.latitude}, Lon: {disaster_alert.longitude}, Radius: 10km).")
+        except Exception as e:
+            logging.error(f"Error during location-based filtering: {e}")
+            # Handle error, perhaps fall back or return an error response
+            raise HTTPException(status_code=500, detail="Error during user filtering.")
+    else:
+        # Log a warning if coordinates are missing
+        logging.warning(f"Disaster alert data for SN {disaster_alert.SN} lacks latitude/longitude. Cannot filter by location.")
+        # Decide fallback behavior: filter by region name? Notify no one?
+        # For now, notify no one if coordinates are missing.
+        users_to_notify = []
+        # Alternatively, could fall back to region name filtering:
+        # users_to_notify = _filter_target_users(db, disaster_alert.RCPTN_RGN_NM)
+        # logging.info(f"Falling back to region name filtering for {disaster_alert.RCPTN_RGN_NM}. Found {len(users_to_notify)} users.")
+
+    # --- 기존 알림 로직 사용 ---
+    if users_to_notify:
+        logging.info(f"Sending notifications to {len(users_to_notify)} users...")
         
-    # Generate Voice messages for users who want calls
-    voice_notifications = [] # This will store user and the voice message text
-    if voice_users:
-        print("Generating Voice messages...")
-        # Generate the voice message text once for the disaster alert
-        voice_alert_text = generate_voice_alert_message(disaster_alert) 
-        # Assign the same message text to all voice users for this alert
-        voice_notifications = [{"user": user, "message_text": voice_alert_text} for user in voice_users]
-        # logging.warning("Voice message generation not yet implemented.") # Placeholder Removed
-
-    # 3. Send notifications (adapt for SMS/Voice)
-    sms_send_results = {"success": 0, "failed": 0}
-    if sms_notifications:
-        print("Sending SMS notifications...")
+        # --- 모든 대상자에게 SMS 전송 --- 
+        sms_send_results = {"success": 0, "failed": 0}
+        logging.info("Generating SMS messages for all filtered users...")
+        # Assuming generate_notification_messages exists and returns list of {'to': ..., 'body': ...}
+        sms_notifications = generate_notification_messages(disaster_alert, users_to_notify) # Use users_to_notify
+        logging.info(f"Sending SMS notifications to {len(users_to_notify)} users...")
+        # Assuming send_twilio_notifications exists
         sms_send_results = send_twilio_notifications(sms_notifications)
+        # ---------------------------------
 
-    voice_send_results = {"success": 0, "failed": 0}
-    if voice_notifications: # This check will now pass if there are voice users
-        print("Sending Voice call notifications...")
-        # Call the newly implemented function
-        voice_send_results = send_twilio_voice_alerts(voice_notifications)
-        # logging.warning("Voice call sending not yet implemented.") # Placeholder Removed
-    
-    print("--- SIMULATION PROCESSING COMPLETE ---")
+        # --- 전화를 원하는 사용자에게만 음성 통화 추가 전송 ---
+        voice_send_results = {"success": 0, "failed": 0}
+        # Filter users who want voice calls
+        voice_users = [user for user in users_to_notify if user.wants_info_call]
+        logging.info(f"Identified {len(voice_users)} users who want voice calls.")
 
-    return {
-        "status": "Disaster simulation processed", 
-        "received_data": disaster_alert,
-        "total_filtered_user_count": len(users_to_notify),
-        "sms_user_count": len(sms_users),
-        "voice_user_count": len(voice_users),
-        "successful_sms_notifications": sms_send_results["success"],
-        "failed_sms_notifications": sms_send_results["failed"],
-        "successful_voice_calls": voice_send_results["success"],
-        "failed_voice_calls": voice_send_results["failed"]
-    }
+        if voice_users:
+            logging.info("Generating Voice message text...")
+            # Assuming generate_voice_alert_message exists
+            voice_alert_text = generate_voice_alert_message(disaster_alert)
+            # Prepare data for voice call function
+            voice_notifications = [{"user": user, "message_text": voice_alert_text} for user in voice_users]
+            logging.info(f"Sending additional Voice call notifications to {len(voice_users)} users...")
+            # Assuming send_twilio_voice_alerts exists
+            voice_send_results = send_twilio_voice_alerts(voice_notifications)
+        # -----------------------------------------------------
+
+        # Calculate combined results
+        total_sms_sent = sms_send_results.get('success', 0) + sms_send_results.get('failed', 0)
+        total_voice_calls_attempted = len(voice_users)
+
+        logging.info(f"Notification results: SMS Success={sms_send_results.get('success', 0)}, SMS Failed={sms_send_results.get('failed', 0)}, Voice Success={voice_send_results.get('success', 0)}, Voice Failed={voice_send_results.get('failed', 0)}")
+        return {
+            "message": f"Disaster simulation initiated for {len(users_to_notify)} users. SMS sent to all. Additional voice calls attempted for {total_voice_calls_attempted}.", 
+            "results": {
+                "total_filtered_users": len(users_to_notify),
+                "sms_success": sms_send_results.get('success', 0),
+                "sms_failed": sms_send_results.get('failed', 0),
+                "voice_success": voice_send_results.get('success', 0),
+                "voice_failed": voice_send_results.get('failed', 0)
+            }
+        }
+    else:
+        logging.info("No users found in the target area based on coordinates.")
+        return {"message": "No users found in the target area based on coordinates. No notifications sent."}
 
 app.include_router(api_router)
 
@@ -763,10 +923,10 @@ async def handle_gather(request: Request, db: Session = Depends(get_db)):
 # --- Webhook Endpoint for Voice Alert Response (ENGLISH) --- 
 @twilio_router.post("/handle-voice-alert-response", tags=["Twilio Webhooks"])
 # Revert signature to only take request, parse query param manually
-async def handle_voice_alert_response(request: Request):
-    """Handles the user's English speech input, including the original alert message context."""
+async def handle_voice_alert_response(request: Request, db: Session = Depends(get_db)):
+    """Handles the user's English speech input, saves it to the User model, and includes original alert context."""
     # Log entry immediately
-    logging.info(f"--- Entered /handle-voice-alert-response (Manual Query Param Parsing) --- ") 
+    logging.info(f"--- Entered /handle-voice-alert-response (Saving to User Model) --- ") 
     logging.info(f"Request URL: {request.url}")
     
     resp = VoiceResponse()
@@ -795,9 +955,11 @@ async def handle_voice_alert_response(request: Request):
         speech_confidence = form.get('Confidence', 'N/A')
         logging.info(f"*** Initial Speech Result Extracted: '{speech_result}' (Confidence: {speech_confidence}) ***")
 
-        caller_phone_number = form.get('From')
+        # Use 'To' field for the recipient's number in outbound calls
+        caller_phone_number = form.get('To') 
         call_sid = form.get('CallSid')
-        logging.info(f"Extracted Form Data - From: {caller_phone_number}, CallSid: {call_sid}")
+        # Log both 'From' and 'To' for clarity
+        logging.info(f"Extracted Form Data - From(Twilio): {form.get('From')}, To(Recipient): {caller_phone_number}, CallSid: {call_sid}")
 
     except Exception as e:
         logging.error(f"Error reading form data: {e}", exc_info=True)
@@ -822,7 +984,25 @@ async def handle_voice_alert_response(request: Request):
     logging.info(f"  Speech Result (before check): '{speech_result}' (Confidence: {speech_confidence})") 
     logging.info(f"  Original Alert Context: {original_alert}")
     
-    # Check if the user said 'report' (case-insensitive)
+    # --- Save response to Database --- 
+    if caller_phone_number and caller_phone_number != "(From not found)" and speech_result != "(SpeechResult not found or error)": # Check caller_phone_number validity
+        db_user = get_user_by_phone(db, phone_number=caller_phone_number)
+        if db_user:
+            try:
+                db_user.last_voice_response = speech_result
+                db_user.last_response_timestamp = datetime.utcnow() # Use UTC time 
+                db.commit()
+                logging.info(f"Successfully updated last response for user {caller_phone_number} in DB.")
+            except Exception as e:
+                db.rollback() # Rollback in case of commit error
+                logging.error(f"Database error updating user {caller_phone_number}: {e}", exc_info=True)
+        else:
+            logging.warning(f"User with phone number {caller_phone_number} not found in DB. Cannot save response.")
+    else:
+        logging.warning("Cannot save to DB: Caller phone number or speech result was invalid.")
+    # --------------------------------
+
+    # --- Original Logic for TwiML Response (based on 'report' keyword) ---
     logging.info(f"Checking for 'report' keyword in speech: '{speech_result}'")
     if 'report' in speech_result:
         logging.info(f"--> 'report' DETECTED for {caller_phone_number}.")
@@ -878,6 +1058,7 @@ async def serve_frontend_app():
 # --- Database and RAG Setup Function (called on startup) ---
 def setup_database_and_rag(app: FastAPI):
     global vectorstore # Declare intent to modify the global variable
+    global chat_model # Declare intent to modify the global variable
     print("Attempting to create database engine and tables...")
     try:
         DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./flask_twilio_demo/users.db") 
@@ -955,6 +1136,22 @@ def setup_database_and_rag(app: FastAPI):
     except Exception as e:
         print(f"CRITICAL ERROR during vectorstore setup: {e}")
         vectorstore = None # Ensure vectorstore is None on error
+
+    # --- Initialize Chat Model --- 
+    print("Attempting to initialize ChatUpstage model...")
+    if upstage_api_key:
+        try:
+            chat_model = ChatUpstage(api_key=upstage_api_key, model="solar-pro") # Or use a different model if needed
+            app.state.chat_model = chat_model # Store in app state
+            print("ChatUpstage model initialized successfully.")
+        except Exception as e:
+            print(f"CRITICAL ERROR during ChatUpstage model initialization: {e}")
+            chat_model = None
+            app.state.chat_model = None
+    else:
+        print("  WARNING: UPSTAGE_API_KEY not found. Chat model cannot be initialized.")
+        chat_model = None
+        app.state.chat_model = None
 
 # --- Main Execution Block (No table creation here anymore) ---
 if __name__ == "__main__":
