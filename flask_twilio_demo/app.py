@@ -74,10 +74,11 @@ def get_db(request: Request) -> Session:
         db.close()
 
 # --- CORS Middleware Configuration ---
-# Allow requests from the React dev server (typically http://localhost:3000)
+# Allow requests from the React dev server AND potentially ngrok or any origin for debugging
 origins = [
     "http://localhost:3000", # React default dev port
     # Add other origins if needed, e.g., your frontend production URL
+    "*" # Allow all origins for debugging - REMOVE/RESTRICT in production!
 ]
 
 app.add_middleware(
@@ -115,10 +116,19 @@ auth_token = os.getenv('TWILIO_AUTH_TOKEN')
 twilio_phone_number = os.getenv('TWILIO_PHONE_NUMBER')
 kakao_map_app_key = os.getenv('KAKAO_MAP_APP_KEY')
 safety_data_service_key = os.getenv('SAFETY_DATA_SERVICE_KEY')
+kakao_rest_api_key = os.getenv('KAKAO_REST_API_KEY') # Also load Kakao REST key
+upstage_api_key = os.getenv('UPSTAGE_API_KEY') # Also load Upstage key
+anthropic_api_key = os.getenv('ANTHROPIC_API_KEY') # Also load Anthropic key
 
-logging.info(f"TWILIO_ACCOUNT_SID: {account_sid}")
-logging.info(f"auth_token: {'*' * len(auth_token) if auth_token else None}") # 토큰은 로그에 직접 노출하지 않도록 처리
-logging.info(f"TWILIO_PHONE_NUMBER: {twilio_phone_number}")
+# Log loaded keys (mask sensitive ones)
+logging.info(f"TWILIO_ACCOUNT_SID loaded: {'Yes' if account_sid else 'No'}")
+logging.info(f"TWILIO_AUTH_TOKEN loaded: {'Yes' if auth_token else 'No'}")
+logging.info(f"TWILIO_PHONE_NUMBER loaded: {'Yes' if twilio_phone_number else 'No'}")
+logging.info(f"KAKAO_MAP_APP_KEY loaded: {'Yes' if kakao_map_app_key else 'No'}")
+logging.info(f"KAKAO_REST_API_KEY loaded: {'Yes' if kakao_rest_api_key else 'No'}")
+logging.info(f"SAFETY_DATA_SERVICE_KEY loaded: {'Yes' if safety_data_service_key else 'No'}")
+logging.info(f"UPSTAGE_API_KEY loaded: {'Yes' if upstage_api_key else 'No'}")
+logging.info(f"ANTHROPIC_API_KEY loaded: {'Yes' if anthropic_api_key else 'No'}")
 
 # Check if credentials are loaded
 if not account_sid or not auth_token or not twilio_phone_number:
@@ -178,7 +188,7 @@ class RegionSummary(BaseModel):
 
 # --- Disaster Alert Data Schema (Re-added) ---
 class DisasterAlertData(BaseModel):
-    SN: str             # 일련번호
+    SN: str             # 일련번화
     CRT_DT: str         # 생성일시 (문자열로 받음, 필요시 파싱)
     MSG_CN: str         # 메시지내용
     RCPTN_RGN_NM: str   # 수신지역명
@@ -677,6 +687,42 @@ def _extract_region_from_address(address: str) -> Optional[str]:
 # --- API Router Definition ---
 api_router = APIRouter(prefix="/api")
 
+# --- NEW Endpoint to retrieve simulation info ---
+@api_router.get("/simulation_info/{simulation_id}", response_model=DisasterAlertData, tags=["Disaster"])
+# Add request: Request to the function signature
+async def get_simulation_info(request: Request, simulation_id: str):
+    """
+    Retrieves the details of a specific disaster simulation using its ID (SN).
+    Used by the disaster map page to get context.
+    """
+    try: # Add generic try block to catch unexpected errors
+        # Log User-Agent header to see browser details
+        user_agent = request.headers.get("user-agent", "Unknown")
+        logging.info(f"Request User-Agent for simulation {simulation_id}: {user_agent}")
+
+        logging.info(f"Request received for simulation info with ID: {simulation_id}")
+        # Retrieve data from the app state via request object
+        simulation_data = request.app.state.active_simulations.get(simulation_id)
+        
+        if not simulation_data:
+            logging.warning(f"Simulation data not found in app.state for ID: {simulation_id}")
+            raise HTTPException(status_code=404, detail=f"Simulation data not found for ID {simulation_id}") # Known error
+            
+        logging.info(f"Returning simulation data from app.state for ID: {simulation_id}")
+        # Return the Pydantic model directly, FastAPI handles serialization
+        return simulation_data
+        
+    except HTTPException as http_exc:
+        # Re-raise HTTPException so FastAPI handles it correctly (JSON error response)
+        logging.error(f"HTTPException in get_simulation_info for ID {simulation_id}: {http_exc.status_code} - {http_exc.detail}")
+        raise http_exc
+    except Exception as e:
+        # Log any other unexpected error that might be happening only on Safari
+        logging.error(f"Unexpected error in get_simulation_info for ID {simulation_id}: {e}", exc_info=True)
+        # Return a 500 error, FastAPI should ideally convert this to JSON error too
+        raise HTTPException(status_code=500, detail="Internal server error fetching simulation info.")
+# -------------------------------------------------
+
 # --- Dashboard Endpoint --- 
 @api_router.get("/dashboard/summary", response_model=List[RegionSummary], tags=["Dashboard"])
 def get_dashboard_summary(request: Request, db: Session = Depends(get_db)):
@@ -816,51 +862,137 @@ async def make_call(call_request: CallRequest):
         print(f"Error making call: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# New endpoint to proxy Safety Data API calls
-@api_router.get("/shelters", tags=["External APIs"])
-async def get_shelters(region: str, page: int = 1, rows: int = 10):
-    if not safety_data_service_key:
-        raise HTTPException(status_code=500, detail="Safety Data API key not configured")
+# Rename the endpoint and modify parameters to match disaster_map.html
+@api_router.get("/shelters_proxy", tags=["External APIs"])
+async def shelters_proxy(request: Request):
+    # ... (parameter extraction and validation as before) ...
+    start_lat = request.query_params.get("startLat")
+    end_lat = request.query_params.get("endLat")
+    start_lot = request.query_params.get("startLot")
+    end_lot = request.query_params.get("endLot")
 
-    api_url = "https://www.safetydata.go.kr/V2/api/DSSP-IF-10941"
-    params = {
-        "serviceKey": safety_data_service_key,
-        "region": region,
-        "numOfRows": rows,
-        "pageNo": page,
-        "returnType": "json" # Ensure API returns JSON
+    service_key = safety_data_service_key # Use the key loaded earlier
+
+    if not service_key:
+        # ... (error handling for missing key)
+        logging.error("SAFETY_DATA_SERVICE_KEY is not loaded from environment variables.")
+        raise HTTPException(
+            status_code=500, detail="Server configuration error: Safety API key missing."
+        )
+        
+    if not all([start_lat, end_lat, start_lot, end_lot]):
+        # ... (error handling for missing coordinates)
+        logging.warning(
+            f"Missing coordinate parameters: startLat={start_lat}, endLat={end_lat}, startLot={start_lot}, endLot={end_lot}"
+        )
+        raise HTTPException(
+            status_code=400, detail="Missing coordinate parameters"
+        )
+        
+    # Construct the external API URL - matching app_minsu.py structure
+    external_api_url = (
+        f"https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?"
+        f"serviceKey={service_key}&" # Removed urllib.parse.quote
+        f"startLot={start_lot}&endLot={end_lot}&"
+        f"startLat={start_lat}&endLat={end_lat}&"
+        f"pageNo=1&numOfRows=100"  # Removed returnType=json
+    )
+
+    logging.info(f"Proxying shelter request to (adjusted): {external_api_url}")
+
+    # Define a common browser User-Agent header (Keep this change for now, might still be relevant)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
     }
+
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(api_url, params=params, timeout=10.0)
-            response.raise_for_status() # Raise exception for bad status codes
-            data = response.json()
-            # Check for API-specific error structure if known
-            if data.get("response", {}).get("header", {}).get("resultCode") != "00":
-                 error_msg = data.get("response", {}).get("header", {}).get("resultMsg", "Unknown API error")
-                 raise HTTPException(status_code=500, detail=f"Safety API Error: {error_msg}")
-            return data # Return the successful JSON response from the external API
-        except httpx.RequestError as exc:
-            print(f"Error requesting Safety Data API: {exc}")
-            raise HTTPException(status_code=502, detail="Failed to connect to Safety Data API")
+            response = await client.get(external_api_url, headers=headers, timeout=15.0)
+            
+            # --- Log raw response BEFORE parsing --- 
+            logging.info(f"External API response status: {response.status_code}")
+            # Limit logging response text size to prevent flooding logs
+            response_text_preview = response.text[:500] + ('...' if len(response.text) > 500 else '')
+            logging.debug(f"External API response text (preview): {response_text_preview}") 
+            # ----------------------------------------
+
+            response.raise_for_status() # Check for HTTP errors (4xx, 5xx)
+            
+            # --- Attempt to parse JSON --- 
+            try:
+                data = response.json()
+                logging.debug("Successfully parsed JSON response.")
+            except Exception as json_err:
+                logging.error(f"Failed to parse JSON from external API response. Error: {json_err}", exc_info=True)
+                logging.error(f"Raw response text that failed parsing: {response.text}") # Log full text on error
+                # Use 502 Bad Gateway when the upstream server sends something unparseable
+                raise HTTPException(status_code=502, detail="Failed to parse response from external API") 
+            # ----------------------------
+
+            # --- Check for API-specific functional error structure ---
+            # Added robust checking for nested keys before accessing
+            # Corrected: Directly access 'header' from the root of the data dictionary
+            api_header = data.get("header") if isinstance(data, dict) else None
+            if not api_header or not isinstance(api_header, dict):
+                logging.error(f"External Safety API response JSON structure is invalid or missing 'header'. Data: {data}")
+                raise HTTPException(status_code=502, detail="Invalid response structure from external Safety API.")
+
+            result_code = api_header.get("resultCode")
+            
+            if result_code != "00":
+                 error_msg = api_header.get("resultMsg", "Unknown API error")
+                 log_message = f"External Safety API functional error: {error_msg} (Code: {result_code}) - URL: {external_api_url}"
+                 logging.error(log_message)
+                 # Use 502 Bad Gateway as the upstream server responded, but with a functional error
+                 raise HTTPException(status_code=502, detail=f"External Safety API Error: {error_msg}") 
+            # ------------------------------------------------------
+
+            # If resultCode is '00', return the data
+            logging.info("External Safety API call successful (resultCode=00).")
+            return data
+
         except httpx.HTTPStatusError as exc:
-            print(f"Error response {exc.response.status_code} from Safety Data API: {exc.response.text}")
-            raise HTTPException(status_code=exc.response.status_code, detail="Error received from Safety Data API")
+            # Log the error details from the external API
+            # This catches the 4xx/5xx errors after raise_for_status()
+            logging.error(f"HTTP error status from external API: {exc.response.status_code} - Response: {exc.response.text[:500]}... - URL: {external_api_url}")
+            status_code_to_return = exc.response.status_code if exc.response.status_code >= 500 else 502
+            raise HTTPException(
+                status_code=status_code_to_return, 
+                detail={"error": "External API returned HTTP error", "details": exc.response.text}
+            )
+        except httpx.TimeoutException:
+            logging.error(f"Timeout error calling external API: {external_api_url}")
+            raise HTTPException(status_code=504, detail="External API timed out")
+        except httpx.RequestError as exc:
+            logging.error(f"Request error calling external API: {exc} - URL: {external_api_url}")
+            raise HTTPException(status_code=502, detail=f"Error connecting to external API: {exc}")
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-            raise HTTPException(status_code=500, detail="An internal error occurred while fetching shelter data")
+            # Check if the caught exception is already an HTTPException
+            if isinstance(e, HTTPException):
+                # If it is, re-raise it directly to preserve the original status code and detail
+                raise e 
+            else:
+                # Catch any other unexpected errors during the process
+                logging.error(f"An unexpected internal error occurred in shelters_proxy: {e}", exc_info=True)
+                # For truly unexpected errors, return a generic 500
+                raise HTTPException(status_code=500, detail="An internal server error occurred")
 
 # --- Refactored endpoint for simulating disaster ---
 @api_router.post("/simulate_disaster/", tags=["Disaster"])
-async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Depends(get_db)):
+# Add request: Request to the function signature
+async def simulate_disaster(request: Request, disaster_alert: DisasterAlertData, db: Session = Depends(get_db)):
     """
     Simulates a disaster alert scenario:
-    1. Updates disaster coordinates if address provided.
-    2. Filters users based on location proximity.
-    3. Generates user-specific messages (SMS & Voice) considering vulnerability type.
-    4. Handles translation based on user preference.
-    5. Sends notifications directly via Twilio API (SMS map url, SMS alert, Voice call).
+    1. Stores disaster info for later retrieval by map.
+    2. Updates disaster coordinates if address provided.
+    3. Filters users based on location proximity.
+    4. Generates user-specific messages (SMS & Voice) considering vulnerability type.
+    5. Handles translation based on user preference.
+    6. Sends notifications directly via Twilio API (SMS map url, SMS alert, Voice call).
     """
+    # REMOVE the global declaration
+    # global active_simulations
+    
     logging.info(f"--- STARTING DISASTER SIMULATION --- ")
     logging.info(f"Received Disaster Alert: SN={disaster_alert.SN}, Type={disaster_alert.DST_SE_NM}, Region={disaster_alert.RCPTN_RGN_NM}")
 
@@ -880,9 +1012,24 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
         else:
              logging.warning("Disaster alert has no address and no explicit coordinates. Cannot filter by location.")
              
-    # Update the disaster_alert object (optional, but good practice)
+    # Update the disaster_alert object with coordinates
     disaster_alert.latitude = disaster_lat
     disaster_alert.longitude = disaster_lon
+    
+    # --- STORE Disaster Info for Map Retrieval using app.state ---
+    # Use SN as the key. WARNING: Overwrites if same SN used again quickly.
+    if disaster_alert.SN:
+        # Access active_simulations via request.app.state
+        request.app.state.active_simulations[disaster_alert.SN] = disaster_alert.model_copy(deep=True) 
+        logging.info(f"Stored simulation data in app.state for SN: {disaster_alert.SN}")
+    else:
+        # Handle cases where SN might be missing (though it's required by schema)
+        logging.error("Disaster Alert SN is missing. Cannot store simulation data for map.")
+        # Decide how to proceed - maybe raise an error or generate a temporary ID?
+        # For now, we'll log an error and proceed.
+        # Map link functionality will likely fail later if SN is missing.
+        pass 
+    # -------------------------------------------
 
     # --- 2. Filter Target Users by Location --- 
     # Define the radius for notification (e.g., 10 km)
@@ -895,7 +1042,6 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
         logging.info(f"Found {len(users_to_notify)} users within the radius.")
     else:
         logging.warning("Disaster location coordinates unknown. Cannot filter users by location. Alerting ALL users.")
-        # Fallback: Get all users if location filtering isn't possible (adjust limit as needed)
         users_to_notify = get_users(db, limit=500) # Be careful with large numbers
         logging.info(f"Alerting {len(users_to_notify)} users (fallback: no location filter).")
 
@@ -903,17 +1049,12 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
         logging.warning("No users found to notify. Exiting simulation.")
         return {"status": "No users to notify", "sms_sent": 0, "sms_failed": 0, "calls_initiated": 0, "calls_failed": 0}
 
-    # Check Twilio config before proceeding
     if not client or not twilio_phone_number:
         logging.error("Twilio client not configured. Cannot send notifications.")
         raise HTTPException(status_code=500, detail="Twilio configuration error, cannot send notifications.")
         
-    # --- HARDCODED base_url for map and voice response --- 
-    # TODO: Move this to configuration
     hardcoded_base_url = "https://5eaf-121-160-208-235.ngrok-free.app"
-    # ------------------------------------------------------
     
-    # --- 3-5. Generate Messages & Send Notifications per User --- 
     sms_sent_count = 0
     sms_failed_count = 0
     calls_initiated_count = 0
@@ -921,6 +1062,18 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
 
     logging.info(f"--- Starting Notification Loop for {len(users_to_notify)} users --- ")
     
+    # --- Prepare Map URL with Simulation ID (SN) ---
+    # Only generate the link if SN exists
+    map_url_for_sms = None
+    if disaster_alert.SN:
+        # Use the simulation ID (SN) in the path
+        map_url_for_sms = f"{hardcoded_base_url}/map/disaster_map/{disaster_alert.SN}"
+        logging.info(f"Generated map URL with simulation ID (SN): {map_url_for_sms}")
+    else:
+         # Log warning if SN is missing, map link won't be generated
+         logging.warning("Cannot generate map URL as disaster SN is missing.")
+    # ------------------------------------------
+
     for user in users_to_notify:
         logging.info(f"Processing user: ID={user.id}, Phone={user.phone_number}, Lang={user.preferred_language}, Type={user.vulnerability_type}")
         
@@ -965,39 +1118,63 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
         logging.info(f"  TTS Code: {tts_code}, Voice: {tts_voice}")
         
         # --- Send SMS Notifications (Map URL + Alert) --- 
-        full_map_url = f"{hardcoded_base_url}/map/map_api"
-        map_message_body = f"Nearby shelters/safety info: {full_map_url}"
-        
-        try:
-            # 1. Send Map URL SMS
-            logging.info(f"  1 -> Sending MAP URL SMS ({map_message_body}) to {user.phone_number}")
-            message1 = client.messages.create(
-                body=map_message_body,
-                from_=twilio_phone_number,
-                to=user.phone_number
-            )
-            logging.info(f"    Map URL SMS sent! SID: {message1.sid}")
+        # Revert to sending two separate SMS messages
 
-            # 2. Send Alert SMS (after brief delay)
+        # 1. Send Map URL SMS (only if URL exists)
+        if map_url_for_sms:
+            # Modify the message body to include more context
+            map_message_body_ko = f"[{disaster_alert.DST_SE_NM}] {disaster_alert.RCPTN_RGN_NM}. 가까운 대피소/안전 정보: {map_url_for_sms}"
+            map_message_body_en = f"[{DISASTER_TYPE_MAP_KO_EN.get(disaster_alert.DST_SE_NM, disaster_alert.DST_SE_NM)}] {disaster_alert.RCPTN_RGN_NM}. Nearby shelters/safety info: {map_url_for_sms}"
+            map_message_body = map_message_body_en if user.preferred_language == 'en' else map_message_body_ko
+            
             try:
-                time.sleep(0.5) # Short delay between messages
-                logging.info(f"  2 -> Sending ALERT SMS ({sms_content_final}) to {user.phone_number}")
-                message2 = client.messages.create(
-                    body=sms_content_final,
+                logging.info(f"  1 -> Sending MAP URL SMS with context ({map_message_body}) to {user.phone_number}")
+                message1 = client.messages.create(
+                    body=map_message_body,
                     from_=twilio_phone_number,
                     to=user.phone_number
                 )
-                logging.info(f"    Alert SMS sent! SID: {message2.sid}")
-                sms_sent_count += 1
-            except Exception as e2:
-                logging.error(f"    ERROR sending ALERT SMS to {user.phone_number} after map URL: {e2}", exc_info=True)
-                sms_failed_count += 1
-                
-        except Exception as e1:
-            logging.error(f"    ERROR sending MAP URL SMS to {user.phone_number}: {e1}", exc_info=True)
-            sms_failed_count += 1 # Count failure if map URL fails (alert won't be sent)
+                logging.info(f"    Map URL SMS sent! SID: {message1.sid}")
+                # Introduce a short delay ONLY if the first message was sent successfully
+                time.sleep(0.5)
 
-        # --- Send Voice Call Notification (if user wants it) --- 
+                # 2. Send Alert SMS (ONLY if map URL SMS was attempted)
+                try:
+                    logging.info(f"  2 -> Sending ALERT SMS ({sms_content_final}) to {user.phone_number}")
+                    message2 = client.messages.create(
+                        body=sms_content_final,
+                        from_=twilio_phone_number,
+                        to=user.phone_number
+                    )
+                    logging.info(f"    Alert SMS sent! SID: {message2.sid}")
+                    sms_sent_count += 1 # Count success only if both are attempted/sent
+                except Exception as e2:
+                    logging.error(f"    ERROR sending ALERT SMS to {user.phone_number} after map URL: {e2}", exc_info=True)
+                    sms_failed_count += 1 # Count failure if alert SMS fails
+
+            except Exception as e1:
+                logging.error(f"    ERROR sending MAP URL SMS to {user.phone_number}: {e1}", exc_info=True)
+                # If map URL fails, don't count it as sent, but maybe as failed? Or should we still send alert?
+                # Current logic: If map fails, alert is not sent. Count as failed.
+                sms_failed_count += 1
+
+        else:
+            # If map URL couldn't be generated (due to missing SN), send only the alert SMS
+            logging.warning(f"  Skipping Map URL SMS for user {user.id} as map URL could not be generated (SN missing?).")
+            try:
+                 logging.info(f"  -> Sending ALERT SMS ONLY ({sms_content_final}) to {user.phone_number}")
+                 message_alert_only = client.messages.create(
+                     body=sms_content_final,
+                     from_=twilio_phone_number,
+                     to=user.phone_number
+                 )
+                 logging.info(f"    Alert SMS (only) sent! SID: {message_alert_only.sid}")
+                 sms_sent_count += 1
+            except Exception as e_alert_only:
+                 logging.error(f"    ERROR sending ALERT SMS ONLY to {user.phone_number}: {e_alert_only}", exc_info=True)
+                 sms_failed_count += 1
+            
+        # --- Send Voice Call Notification (if user wants it) ---
         if user.wants_info_call:
             logging.info(f"  User {user.id} wants info call. Initiating voice call...")
             
@@ -1063,6 +1240,150 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
         "calls_initiated": calls_initiated_count,
         "calls_failed": calls_failed_count
     }
+
+# --- Dummy Disaster Data (keyed by ID) ---
+DUMMY_DISASTERS = {
+    "earthquake_gangnam": {
+        "location": "Gangnam-gu, Seoul",
+        "type": "Large Fire",
+        "scale": "Magnitude 4.1",
+        "time": "10:30",
+        "coordinates": {"lat": 37.5503455, "lng": 127.0726955},
+        "radius": 3000,
+    },
+    "fire_seongdong": {
+        "location": "Seongdong-gu, Seoul",
+        "type": "large fire",
+        "scale": None,
+        "time": "11:15",
+        "coordinates": {"lat": 37.5637, "lng": 127.0368},
+        "radius": 1500,
+    },
+    "flood_mapo": {
+        "location": "Mapo-gu, Seoul",
+        "type": "flood warning",
+        "scale": "Heavy Rain Advisory",
+        "time": "09:00",
+        "coordinates": {"lat": 37.5665, "lng": 126.9011},  # Near Hongdae
+        "radius": 5000,
+    },
+    "default": {  # A default if no ID is provided or matched
+        "location": "Jung-gu, Seoul",
+        "type": "unknown alert",
+        "scale": "N/A",
+        "time": "12:00",
+        "coordinates": {"lat": 37.5665, "lng": 126.9780},  # City Hall area
+        "radius": 2000,
+    },
+}
+
+@api_router.get("/disaster/{disaster_id}", tags=["Disaster Info"])
+async def get_disaster_data(disaster_id: str):
+    """
+    Retrieves dummy disaster information based on the provided ID.
+    """
+    disaster_info = DUMMY_DISASTERS.get(disaster_id)
+    if not disaster_info:
+        # Return default disaster if ID not found
+        disaster_info = DUMMY_DISASTERS.get("default")
+    return disaster_info
+
+@api_router.get("/disaster/", tags=["Disaster Info"])
+async def get_default_disaster_data():
+    """
+    Retrieves default dummy disaster information.
+    """
+    return DUMMY_DISASTERS.get("default")
+
+# --- Dummy Emergency Info ---
+DUMMY_EMERGENCY_INFO = {
+    "earthquake_gangnam": {
+        "emergency_contacts": {
+            "police": "112",
+            "fire_department": "119",
+            "disaster_management": "02-2128-5800",
+        },
+        "safety_instructions": [
+            "Drop to the ground and take cover under sturdy furniture",
+            "Stay away from windows, exterior walls, and anything that could fall",
+            "If you're outdoors, stay in open areas away from buildings and power lines",
+            "After shaking stops, evacuate to open areas",
+        ],
+        "evacuation_centers": [
+            "Gangnam Community Center - 23 Gangnam-daero, Gangnam-gu",
+            "Yeoksam Elementary School - 146 Teheran-ro, Gangnam-gu",
+            "COEX Convention Center - 513 Yeongdong-daero, Gangnam-gu",
+        ],
+    },
+    "fire_seongdong": {
+        "emergency_contacts": {
+            "police": "112",
+            "fire_department": "119",
+            "disaster_management": "02-2286-5272",
+        },
+        "safety_instructions": [
+            "Cover your mouth and nose with a wet cloth",
+            "Stay close to the floor where air is less toxic",
+            "Do not use elevators, use emergency staircases",
+            "Feel doors before opening - if hot, find another exit route",
+        ],
+        "evacuation_centers": [
+            "Seongdong-gu Office - 18 Wangsan-ro, Seongdong-gu",
+            "Haengdang Public Park - 20 Haengdang-dong, Seongdong-gu",
+            "Seoul Children's Grand Park - 216 Neungdong-ro, Seongdong-gu",
+        ],
+    },
+    "flood_mapo": {
+        "emergency_contacts": {
+            "police": "112",
+            "fire_department": "119",
+            "disaster_management": "02-3153-8332",
+        },
+        "safety_instructions": [
+            "Move to higher ground immediately",
+            "Avoid walking or driving through flooded areas",
+            "Stay away from power lines and electrical wires",
+            "Be cautious of gas leaks and damaged infrastructure",
+        ],
+        "evacuation_centers": [
+            "Mapo Arts Center - 31 World Cup buk-ro, Mapo-gu",
+            "Sogang University Stadium - 35 Baekbeom-ro, Mapo-gu",
+            "Hapjeong Middle School - 26 Wausan-ro, Mapo-gu",
+        ],
+    },
+    "default": {
+        "emergency_contacts": {
+            "police": "112",
+            "fire_department": "119",
+            "disaster_management": "02-120",
+        },
+        "safety_instructions": [
+            "Follow guidance from local authorities",
+            "Turn on radio or TV for emergency information",
+            "If evacuation is advised, do so immediately",
+            "Help others who may require assistance",
+        ],
+        "evacuation_centers": [
+            "Check local government announcements",
+            "Contact 120 (Seoul city information) for nearest evacuation center",
+        ],
+    },
+}
+
+@api_router.get("/emergency_info/{disaster_id}", tags=["Disaster Info"])
+async def get_emergency_info(disaster_id: str):
+    """
+    Returns dummy emergency information for a specific disaster
+    """
+    # Get emergency info for requested disaster or default if not found
+    info = DUMMY_EMERGENCY_INFO.get(disaster_id, DUMMY_EMERGENCY_INFO["default"])
+
+    # Add generic information that applies to all disasters
+    info["general_advice"] = (
+        "Call 119 for immediate emergencies. Follow official instructions."
+    )
+
+    return info
 
 app.include_router(api_router)
 
@@ -1216,19 +1537,51 @@ app.include_router(twilio_router)
 
 # --- Frontend and Map Serving Endpoints ---
 
-@app.get("/map/{map_file_name}", response_class=HTMLResponse, tags=["Serving"])
-async def serve_map(request: Request, map_file_name: str):
-    allowed_maps = ["map_api", "map_wide", "shelter_temp", "temp"]
-    base_map_name = map_file_name.replace(".html", "")
-    if base_map_name not in allowed_maps:
-        raise HTTPException(status_code=404, detail="Map not found")
-    template_name = f"{base_map_name}.html"
-    context = {"request": request, "kakao_map_app_key": kakao_map_app_key}
+# Modify map serving endpoint to accept the ID in the path
+@app.get("/map/{map_file_path:path}", response_class=HTMLResponse, tags=["Serving"])
+async def serve_map_or_html(request: Request, map_file_path: str):
+    """Serves map HTML files, extracting ID if path matches disaster_map pattern."""
+    
+    # Check if the request is for the disaster map with an ID using regex
+    # Pattern: starts with 'disaster_map/', followed by one or more non-slash characters (the ID)
+    match = re.match(r"^disaster_map/([^/]+)$", map_file_path)
+    if match:
+        simulation_id = match.group(1) # Extracted simulation ID (SN)
+        template_name = "disaster_map.html"
+        context = {
+            "request": request, 
+            "kakao_map_app_key": kakao_map_app_key, # Still needed for Kakao map script
+            # Pass the extracted ID to the template context as 'simulation_id'
+            "simulation_id": simulation_id 
+        }
+        logging.info(f"Serving disaster map for simulation ID: {simulation_id}")
+    elif map_file_path.endswith(".html"):
+        # Serve other potential HTML files directly
+        template_name = map_file_path
+        # For other HTML files, simulation_id is not relevant
+        context = {"request": request, "kakao_map_app_key": kakao_map_app_key} 
+        logging.info(f"Serving general map/HTML file: {template_name}")
+    else:
+        # If it's not disaster_map/{id} or an .html file, return 404
+        logging.warning(f"Map file path not recognized: {map_file_path}")
+        raise HTTPException(status_code=404, detail="Map file not found")
+
     try:
+        # Check if the template exists before trying to render
+        template_path = templates_dir / template_name
+        if not template_path.is_file():
+            logging.warning(f"Map template file not found at: {template_path}")
+            raise HTTPException(status_code=404, detail=f"Map template '{template_name}' not found.")
+            
+        # Render the template with the determined context
         return templates.TemplateResponse(template_name, context)
     except Exception as e:
-        print(f"Error rendering template {template_name}: {e}")
-        raise HTTPException(status_code=404, detail="Map template not found or error rendering")
+        # Log the specific error for debugging
+        logging.error(f"Error rendering template {template_name}: {e}", exc_info=True)
+        # Re-raise a generic 404 if the template wasn't found, otherwise 500
+        if isinstance(e, HTTPException) and e.status_code == 404:
+             raise e
+        raise HTTPException(status_code=500, detail=f"Error rendering map template '{template_name}'")
 
 # --- Frontend Serving (Catch-all for React Router) --- 
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
@@ -1244,6 +1597,12 @@ async def serve_react_app(request: Request, full_path: str):
 def setup_database_and_rag(app: FastAPI):
     global vectorstore # Declare intent to modify the global variable
     global chat_model # Declare intent to modify the global variable
+    
+    # Initialize active_simulations dictionary in app.state
+    print("Initializing active_simulations dictionary in app.state...")
+    app.state.active_simulations = {}
+    print("active_simulations initialized.")
+
     print("Attempting to create database engine and tables...")
     try:
         DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./flask_twilio_demo/users.db") 

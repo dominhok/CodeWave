@@ -1,0 +1,147 @@
+2025-04-13 01:23:58 - root - INFO - --- Logging Configured ---
+2025-04-13 01:23:58 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:23:58 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:23:58 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:23:58 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:24:02 - root - INFO - --- Logging Configured ---
+2025-04-13 01:24:02 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:24:02 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:24:02 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:24:02 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:24:12 - root - INFO - --- Logging Configured ---
+2025-04-13 01:24:12 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:24:12 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:24:12 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:24:12 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:24:14 - root - INFO - --- Logging Configured ---
+2025-04-13 01:24:14 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:24:14 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:24:14 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:24:14 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:24:23 - root - INFO - --- Logging Configured ---
+2025-04-13 01:24:23 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:24:23 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:24:23 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:24:23 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:26:35 - root - INFO - --- Logging Configured ---
+2025-04-13 01:26:35 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:26:35 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:26:35 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:26:35 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:27:05 - root - INFO - --- Logging Configured ---
+2025-04-13 01:27:05 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:27:05 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:27:05 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:27:05 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:29:37 - root - INFO - --- Logging Configured ---
+2025-04-13 01:29:37 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:29:37 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:29:37 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:29:37 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:29:59 - root - INFO - --- Logging Configured ---
+2025-04-13 01:29:59 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:29:59 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:29:59 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:29:59 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:30:27 - root - INFO - --- Logging Configured ---
+2025-04-13 01:30:27 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:30:27 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:30:27 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:30:27 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:33:19 - root - INFO - --- Logging Configured ---
+2025-04-13 01:33:19 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:33:19 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:33:19 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:33:19 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:35:08 - root - INFO - --- Logging Configured ---
+2025-04-13 01:35:08 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:35:08 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:35:08 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:35:08 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:37:59 - root - INFO - --- Logging Configured ---
+2025-04-13 01:37:59 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:37:59 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:37:59 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:37:59 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:38:07 - root - INFO - --- Logging Configured ---
+2025-04-13 01:38:07 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:38:07 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:38:07 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:38:07 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:38:22 - root - INFO - --- Logging Configured ---
+2025-04-13 01:38:22 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:38:22 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:38:22 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:38:22 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:40:40 - root - INFO - --- Logging Configured ---
+2025-04-13 01:40:40 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:40:40 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:40:40 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:40:40 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:41:18 - root - INFO - --- Logging Configured ---
+2025-04-13 01:41:18 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:41:18 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:41:18 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:41:18 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:44:41 - root - INFO - --- Logging Configured ---
+2025-04-13 01:44:41 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:44:41 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:44:41 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:44:41 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:44:48 - root - INFO - --- Logging Configured ---
+2025-04-13 01:44:48 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:44:48 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:44:48 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:44:48 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:44:51 - root - INFO - --- Logging Configured ---
+2025-04-13 01:44:51 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:44:51 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:44:51 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:44:51 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:44:56 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:44:56 - root - INFO - External API Response Status: 200
+2025-04-13 01:44:56 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 01:45:22 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:45:22 - root - INFO - External API Response Status: 200
+2025-04-13 01:45:22 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 01:45:30 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:45:30 - root - INFO - External API Response Status: 200
+2025-04-13 01:45:30 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 01:45:51 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:45:51 - root - INFO - External API Response Status: 200
+2025-04-13 01:45:51 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 01:45:58 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:45:58 - root - INFO - External API Response Status: 200
+2025-04-13 01:45:58 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 01:46:06 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:46:06 - root - INFO - External API Response Status: 200
+2025-04-13 01:46:06 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 01:46:21 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:46:21 - root - INFO - External API Response Status: 200
+2025-04-13 01:46:21 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 01:46:37 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:46:37 - root - INFO - External API Response Status: 200
+2025-04-13 01:46:37 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 01:58:36 - root - INFO - --- Logging Configured ---
+2025-04-13 01:58:36 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:58:36 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:58:36 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:58:36 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:59:16 - root - INFO - --- Logging Configured ---
+2025-04-13 01:59:16 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 01:59:16 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 01:59:16 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 01:59:16 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 01:59:45 - httpx - INFO - HTTP Request: GET https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=4NJY4E848O20G443&startLot=126.9722199&endLot=127.17221989999999&startLat=37.4505441&endLat=37.650544100000005&pageNo=1&numOfRows=100 "HTTP/1.1 200 "
+2025-04-13 01:59:45 - root - INFO - External API Response Status: 200
+2025-04-13 01:59:45 - root - INFO - External API Response Content-Type: application/json
+2025-04-13 02:00:21 - root - INFO - --- Logging Configured ---
+2025-04-13 02:00:21 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 02:00:21 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 02:00:21 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 02:00:21 - root - INFO - --- Database and RAG Setup Completed ---
+2025-04-13 02:13:17 - root - INFO - --- Logging Configured ---
+2025-04-13 02:13:17 - faiss.loader - INFO - Loading faiss with AVX512 support.
+2025-04-13 02:13:17 - faiss.loader - INFO - Successfully loaded faiss with AVX512 support.
+2025-04-13 02:13:17 - faiss - INFO - Failed to load GPU Faiss: name 'GpuIndexIVFFlat' is not defined. Will not load constructor refs for GPU indexes.
+2025-04-13 02:13:18 - root - INFO - --- Database and RAG Setup Completed ---
