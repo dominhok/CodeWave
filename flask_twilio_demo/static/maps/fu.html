@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>경로 안내</title>
+  <script src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=w5mst5owqn"></script>
+  <style>
+    #map {
+      width: 100%;
+      height: 500px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🚶‍♂️ 경로 안내</h1>
+  <div id="map"></div>
+  <script>
+    // 출발지와 목적지 좌표
+    const startLatLng = new naver.maps.LatLng(37.498095, 127.027610); // 출발지 (예: 강남구)
+    const endLatLng = new naver.maps.LatLng(37.501274, 127.039585);   // 목적지 (예: 삼성1동 주민센터)
+
+    // 네이버 지도 생성
+    const map = new naver.maps.Map('map', {
+      center: startLatLng,
+      zoom: 14
+    });
+
+    // 출발지 마커
+    new naver.maps.Marker({
+      position: startLatLng,
+      map: map,
+      icon: {
+        content: '<div style="background-color: #FF3B30; color: white; padding: 5px; border-radius: 50%;">출발지</div>',
+        size: new naver.maps.Size(30, 30),
+        anchor: new naver.maps.Point(15, 15)
+      }
+    });
+
+    // 목적지 마커
+    new naver.maps.Marker({
+      position: endLatLng,
+      map: map,
+      icon: {
+        content: '<div style="background-color: #0078D4; color: white; padding: 5px; border-radius: 50%;">목적지</div>',
+        size: new naver.maps.Size(30, 30),
+        anchor: new naver.maps.Point(15, 15)
+      }
+    });
+
+    // Directions API를 사용하여 경로 탐색
+    function getDirections() {
+      const directionService = new naver.maps.DirectionsService();
+      directionService.route({
+        start: startLatLng,
+        goal: endLatLng,
+        routeMode: naver.maps.DirectionsMode.WALKING,  // 도보 경로
+      }, function(status, response) {
+        if (status === naver.maps.DirectionsStatus.OK) {
+          const route = response.routes[0];  // 첫 번째 경로
+          const path = route.path;
+
+          // 경로를 폴리라인으로 지도에 표시
+          new naver.maps.Polyline({
+            map: map,
+            path: path,
+            strokeColor: '#0033FF',
+            strokeOpacity: 0.7,
+            strokeWeight: 5
+          });
+
+          // 경로가 보이도록 지도 중앙을 경로로 이동
+          const bounds = new naver.maps.LatLngBounds();
+          path.forEach(function(latLng) {
+            bounds.extend(latLng);
+          });
+          map.fitBounds(bounds);
+        } else {
+          alert('경로를 찾을 수 없습니다.');
+        }
+      });
+    }
+
+    // 경로 계산 후 표시
+    getDirections();
+  </script>
+</body>
+</html>
