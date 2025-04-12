@@ -92,5 +92,8 @@ frontend/**/*.mp4
 # Media files in flask_twilio_demo
 flask_twilio_demo/*.mp4
 
+# Frontend build output media files
+flask_twilio_demo/static/static/media/
+
 # Add any other rules or changes here
 # ... 

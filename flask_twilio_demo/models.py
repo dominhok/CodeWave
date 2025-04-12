@@ -21,6 +21,7 @@ class User(Base):
     has_guardian = Column(Boolean, default=False) # 보호자 연결 여부
     guardian_phone_number = Column(String, nullable=True) # 보호자 번호
     wants_info_call = Column(Boolean, default=True) # 안내 전화 여부
+    preferred_language = Column(String, nullable=True) # 선호 언어 추가
     
     # New columns for last voice response
     last_voice_response = Column(String, nullable=True) # Store the last recognized speech
