@@ -115,10 +115,19 @@ auth_token = os.getenv('TWILIO_AUTH_TOKEN')
 twilio_phone_number = os.getenv('TWILIO_PHONE_NUMBER')
 kakao_map_app_key = os.getenv('KAKAO_MAP_APP_KEY')
 safety_data_service_key = os.getenv('SAFETY_DATA_SERVICE_KEY')
+kakao_rest_api_key = os.getenv('KAKAO_REST_API_KEY') # Also load Kakao REST key
+upstage_api_key = os.getenv('UPSTAGE_API_KEY') # Also load Upstage key
+anthropic_api_key = os.getenv('ANTHROPIC_API_KEY') # Also load Anthropic key
 
-logging.info(f"TWILIO_ACCOUNT_SID: {account_sid}")
-logging.info(f"auth_token: {'*' * len(auth_token) if auth_token else None}") # 토큰은 로그에 직접 노출하지 않도록 처리
-logging.info(f"TWILIO_PHONE_NUMBER: {twilio_phone_number}")
+# Log loaded keys (mask sensitive ones)
+logging.info(f"TWILIO_ACCOUNT_SID loaded: {'Yes' if account_sid else 'No'}")
+logging.info(f"TWILIO_AUTH_TOKEN loaded: {'Yes' if auth_token else 'No'}")
+logging.info(f"TWILIO_PHONE_NUMBER loaded: {'Yes' if twilio_phone_number else 'No'}")
+logging.info(f"KAKAO_MAP_APP_KEY loaded: {'Yes' if kakao_map_app_key else 'No'}")
+logging.info(f"KAKAO_REST_API_KEY loaded: {'Yes' if kakao_rest_api_key else 'No'}")
+logging.info(f"SAFETY_DATA_SERVICE_KEY loaded: {'Yes' if safety_data_service_key else 'No'}")
+logging.info(f"UPSTAGE_API_KEY loaded: {'Yes' if upstage_api_key else 'No'}")
+logging.info(f"ANTHROPIC_API_KEY loaded: {'Yes' if anthropic_api_key else 'No'}")
 
 # Check if credentials are loaded
 if not account_sid or not auth_token or not twilio_phone_number:
@@ -816,39 +825,120 @@ async def make_call(call_request: CallRequest):
         print(f"Error making call: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# New endpoint to proxy Safety Data API calls
-@api_router.get("/shelters", tags=["External APIs"])
-async def get_shelters(region: str, page: int = 1, rows: int = 10):
-    if not safety_data_service_key:
-        raise HTTPException(status_code=500, detail="Safety Data API key not configured")
+# Rename the endpoint and modify parameters to match disaster_map.html
+@api_router.get("/shelters_proxy", tags=["External APIs"])
+async def shelters_proxy(request: Request):
+    # ... (parameter extraction and validation as before) ...
+    start_lat = request.query_params.get("startLat")
+    end_lat = request.query_params.get("endLat")
+    start_lot = request.query_params.get("startLot")
+    end_lot = request.query_params.get("endLot")
 
-    api_url = "https://www.safetydata.go.kr/V2/api/DSSP-IF-10941"
-    params = {
-        "serviceKey": safety_data_service_key,
-        "region": region,
-        "numOfRows": rows,
-        "pageNo": page,
-        "returnType": "json" # Ensure API returns JSON
+    service_key = safety_data_service_key # Use the key loaded earlier
+
+    if not service_key:
+        # ... (error handling for missing key)
+        logging.error("SAFETY_DATA_SERVICE_KEY is not loaded from environment variables.")
+        raise HTTPException(
+            status_code=500, detail="Server configuration error: Safety API key missing."
+        )
+        
+    if not all([start_lat, end_lat, start_lot, end_lot]):
+        # ... (error handling for missing coordinates)
+        logging.warning(
+            f"Missing coordinate parameters: startLat={start_lat}, endLat={end_lat}, startLot={start_lot}, endLot={end_lot}"
+        )
+        raise HTTPException(
+            status_code=400, detail="Missing coordinate parameters"
+        )
+        
+    # Construct the external API URL - matching app_minsu.py structure
+    external_api_url = (
+        f"https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?"
+        f"serviceKey={service_key}&" # Removed urllib.parse.quote
+        f"startLot={start_lot}&endLot={end_lot}&"
+        f"startLat={start_lat}&endLat={end_lat}&"
+        f"pageNo=1&numOfRows=100"  # Removed returnType=json
+    )
+
+    logging.info(f"Proxying shelter request to (adjusted): {external_api_url}")
+
+    # Define a common browser User-Agent header (Keep this change for now, might still be relevant)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
     }
+
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(api_url, params=params, timeout=10.0)
-            response.raise_for_status() # Raise exception for bad status codes
-            data = response.json()
-            # Check for API-specific error structure if known
-            if data.get("response", {}).get("header", {}).get("resultCode") != "00":
-                 error_msg = data.get("response", {}).get("header", {}).get("resultMsg", "Unknown API error")
-                 raise HTTPException(status_code=500, detail=f"Safety API Error: {error_msg}")
-            return data # Return the successful JSON response from the external API
-        except httpx.RequestError as exc:
-            print(f"Error requesting Safety Data API: {exc}")
-            raise HTTPException(status_code=502, detail="Failed to connect to Safety Data API")
+            response = await client.get(external_api_url, headers=headers, timeout=15.0)
+            
+            # --- Log raw response BEFORE parsing --- 
+            logging.info(f"External API response status: {response.status_code}")
+            # Limit logging response text size to prevent flooding logs
+            response_text_preview = response.text[:500] + ('...' if len(response.text) > 500 else '')
+            logging.debug(f"External API response text (preview): {response_text_preview}") 
+            # ----------------------------------------
+
+            response.raise_for_status() # Check for HTTP errors (4xx, 5xx)
+            
+            # --- Attempt to parse JSON --- 
+            try:
+                data = response.json()
+                logging.debug("Successfully parsed JSON response.")
+            except Exception as json_err:
+                logging.error(f"Failed to parse JSON from external API response. Error: {json_err}", exc_info=True)
+                logging.error(f"Raw response text that failed parsing: {response.text}") # Log full text on error
+                # Use 502 Bad Gateway when the upstream server sends something unparseable
+                raise HTTPException(status_code=502, detail="Failed to parse response from external API") 
+            # ----------------------------
+
+            # --- Check for API-specific functional error structure ---
+            # Added robust checking for nested keys before accessing
+            # Corrected: Directly access 'header' from the root of the data dictionary
+            api_header = data.get("header") if isinstance(data, dict) else None
+            if not api_header or not isinstance(api_header, dict):
+                logging.error(f"External Safety API response JSON structure is invalid or missing 'header'. Data: {data}")
+                raise HTTPException(status_code=502, detail="Invalid response structure from external Safety API.")
+
+            result_code = api_header.get("resultCode")
+            
+            if result_code != "00":
+                 error_msg = api_header.get("resultMsg", "Unknown API error")
+                 log_message = f"External Safety API functional error: {error_msg} (Code: {result_code}) - URL: {external_api_url}"
+                 logging.error(log_message)
+                 # Use 502 Bad Gateway as the upstream server responded, but with a functional error
+                 raise HTTPException(status_code=502, detail=f"External Safety API Error: {error_msg}") 
+            # ------------------------------------------------------
+
+            # If resultCode is '00', return the data
+            logging.info("External Safety API call successful (resultCode=00).")
+            return data
+
         except httpx.HTTPStatusError as exc:
-            print(f"Error response {exc.response.status_code} from Safety Data API: {exc.response.text}")
-            raise HTTPException(status_code=exc.response.status_code, detail="Error received from Safety Data API")
+            # Log the error details from the external API
+            # This catches the 4xx/5xx errors after raise_for_status()
+            logging.error(f"HTTP error status from external API: {exc.response.status_code} - Response: {exc.response.text[:500]}... - URL: {external_api_url}")
+            status_code_to_return = exc.response.status_code if exc.response.status_code >= 500 else 502
+            raise HTTPException(
+                status_code=status_code_to_return, 
+                detail={"error": "External API returned HTTP error", "details": exc.response.text}
+            )
+        except httpx.TimeoutException:
+            logging.error(f"Timeout error calling external API: {external_api_url}")
+            raise HTTPException(status_code=504, detail="External API timed out")
+        except httpx.RequestError as exc:
+            logging.error(f"Request error calling external API: {exc} - URL: {external_api_url}")
+            raise HTTPException(status_code=502, detail=f"Error connecting to external API: {exc}")
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-            raise HTTPException(status_code=500, detail="An internal error occurred while fetching shelter data")
+            # Check if the caught exception is already an HTTPException
+            if isinstance(e, HTTPException):
+                # If it is, re-raise it directly to preserve the original status code and detail
+                raise e 
+            else:
+                # Catch any other unexpected errors during the process
+                logging.error(f"An unexpected internal error occurred in shelters_proxy: {e}", exc_info=True)
+                # For truly unexpected errors, return a generic 500
+                raise HTTPException(status_code=500, detail="An internal server error occurred")
 
 # --- Refactored endpoint for simulating disaster ---
 @api_router.post("/simulate_disaster/", tags=["Disaster"])
@@ -1064,6 +1154,150 @@ async def simulate_disaster(disaster_alert: DisasterAlertData, db: Session = Dep
         "calls_failed": calls_failed_count
     }
 
+# --- Dummy Disaster Data (keyed by ID) ---
+DUMMY_DISASTERS = {
+    "earthquake_gangnam": {
+        "location": "Gangnam-gu, Seoul",
+        "type": "Large Fire",
+        "scale": "Magnitude 4.1",
+        "time": "10:30",
+        "coordinates": {"lat": 37.5503455, "lng": 127.0726955},
+        "radius": 3000,
+    },
+    "fire_seongdong": {
+        "location": "Seongdong-gu, Seoul",
+        "type": "large fire",
+        "scale": None,
+        "time": "11:15",
+        "coordinates": {"lat": 37.5637, "lng": 127.0368},
+        "radius": 1500,
+    },
+    "flood_mapo": {
+        "location": "Mapo-gu, Seoul",
+        "type": "flood warning",
+        "scale": "Heavy Rain Advisory",
+        "time": "09:00",
+        "coordinates": {"lat": 37.5665, "lng": 126.9011},  # Near Hongdae
+        "radius": 5000,
+    },
+    "default": {  # A default if no ID is provided or matched
+        "location": "Jung-gu, Seoul",
+        "type": "unknown alert",
+        "scale": "N/A",
+        "time": "12:00",
+        "coordinates": {"lat": 37.5665, "lng": 126.9780},  # City Hall area
+        "radius": 2000,
+    },
+}
+
+@api_router.get("/disaster/{disaster_id}", tags=["Disaster Info"])
+async def get_disaster_data(disaster_id: str):
+    """
+    Retrieves dummy disaster information based on the provided ID.
+    """
+    disaster_info = DUMMY_DISASTERS.get(disaster_id)
+    if not disaster_info:
+        # Return default disaster if ID not found
+        disaster_info = DUMMY_DISASTERS.get("default")
+    return disaster_info
+
+@api_router.get("/disaster/", tags=["Disaster Info"])
+async def get_default_disaster_data():
+    """
+    Retrieves default dummy disaster information.
+    """
+    return DUMMY_DISASTERS.get("default")
+
+# --- Dummy Emergency Info ---
+DUMMY_EMERGENCY_INFO = {
+    "earthquake_gangnam": {
+        "emergency_contacts": {
+            "police": "112",
+            "fire_department": "119",
+            "disaster_management": "02-2128-5800",
+        },
+        "safety_instructions": [
+            "Drop to the ground and take cover under sturdy furniture",
+            "Stay away from windows, exterior walls, and anything that could fall",
+            "If you're outdoors, stay in open areas away from buildings and power lines",
+            "After shaking stops, evacuate to open areas",
+        ],
+        "evacuation_centers": [
+            "Gangnam Community Center - 23 Gangnam-daero, Gangnam-gu",
+            "Yeoksam Elementary School - 146 Teheran-ro, Gangnam-gu",
+            "COEX Convention Center - 513 Yeongdong-daero, Gangnam-gu",
+        ],
+    },
+    "fire_seongdong": {
+        "emergency_contacts": {
+            "police": "112",
+            "fire_department": "119",
+            "disaster_management": "02-2286-5272",
+        },
+        "safety_instructions": [
+            "Cover your mouth and nose with a wet cloth",
+            "Stay close to the floor where air is less toxic",
+            "Do not use elevators, use emergency staircases",
+            "Feel doors before opening - if hot, find another exit route",
+        ],
+        "evacuation_centers": [
+            "Seongdong-gu Office - 18 Wangsan-ro, Seongdong-gu",
+            "Haengdang Public Park - 20 Haengdang-dong, Seongdong-gu",
+            "Seoul Children's Grand Park - 216 Neungdong-ro, Seongdong-gu",
+        ],
+    },
+    "flood_mapo": {
+        "emergency_contacts": {
+            "police": "112",
+            "fire_department": "119",
+            "disaster_management": "02-3153-8332",
+        },
+        "safety_instructions": [
+            "Move to higher ground immediately",
+            "Avoid walking or driving through flooded areas",
+            "Stay away from power lines and electrical wires",
+            "Be cautious of gas leaks and damaged infrastructure",
+        ],
+        "evacuation_centers": [
+            "Mapo Arts Center - 31 World Cup buk-ro, Mapo-gu",
+            "Sogang University Stadium - 35 Baekbeom-ro, Mapo-gu",
+            "Hapjeong Middle School - 26 Wausan-ro, Mapo-gu",
+        ],
+    },
+    "default": {
+        "emergency_contacts": {
+            "police": "112",
+            "fire_department": "119",
+            "disaster_management": "02-120",
+        },
+        "safety_instructions": [
+            "Follow guidance from local authorities",
+            "Turn on radio or TV for emergency information",
+            "If evacuation is advised, do so immediately",
+            "Help others who may require assistance",
+        ],
+        "evacuation_centers": [
+            "Check local government announcements",
+            "Contact 120 (Seoul city information) for nearest evacuation center",
+        ],
+    },
+}
+
+@api_router.get("/emergency_info/{disaster_id}", tags=["Disaster Info"])
+async def get_emergency_info(disaster_id: str):
+    """
+    Returns dummy emergency information for a specific disaster
+    """
+    # Get emergency info for requested disaster or default if not found
+    info = DUMMY_EMERGENCY_INFO.get(disaster_id, DUMMY_EMERGENCY_INFO["default"])
+
+    # Add generic information that applies to all disasters
+    info["general_advice"] = (
+        "Call 119 for immediate emergencies. Follow official instructions."
+    )
+
+    return info
+
 app.include_router(api_router)
 
 # --- Twilio Webhook Endpoints ---
@@ -1218,17 +1452,56 @@ app.include_router(twilio_router)
 
 @app.get("/map/{map_file_name}", response_class=HTMLResponse, tags=["Serving"])
 async def serve_map(request: Request, map_file_name: str):
-    allowed_maps = ["map_api", "map_wide", "shelter_temp", "temp"]
-    base_map_name = map_file_name.replace(".html", "")
-    if base_map_name not in allowed_maps:
-        raise HTTPException(status_code=404, detail="Map not found")
-    template_name = f"{base_map_name}.html"
+    # Remove allowed_maps check - directly use the file name
+    # Ensure .html extension is handled correctly
+    if not map_file_name.endswith('.html'):
+        template_name = f"{map_file_name}.html"
+    else:
+        template_name = map_file_name
+
     context = {"request": request, "kakao_map_app_key": kakao_map_app_key}
     try:
+        # Check if the template exists before trying to render
+        template_path = templates_dir / template_name
+        if not template_path.is_file():
+            logging.warning(f"Map template file not found at: {template_path}")
+            raise HTTPException(status_code=404, detail=f"Map template '{template_name}' not found.")
+            
         return templates.TemplateResponse(template_name, context)
     except Exception as e:
-        print(f"Error rendering template {template_name}: {e}")
-        raise HTTPException(status_code=404, detail="Map template not found or error rendering")
+        # Log the specific error for debugging
+        logging.error(f"Error rendering template {template_name}: {e}", exc_info=True)
+        # Re-raise a generic 404 if the template wasn't found, otherwise 500
+        if isinstance(e, HTTPException) and e.status_code == 404:
+             raise e
+        raise HTTPException(status_code=500, detail=f"Error rendering map template '{template_name}'")
+
+# New route that handles disaster_map with disaster_id as path parameter
+@app.get("/map/disaster_map/{disaster_id}", response_class=HTMLResponse, tags=["Serving"])
+async def serve_disaster_map_with_id(request: Request, disaster_id: str):
+    template_name = "disaster_map.html"
+
+    # Add the disaster_id to the context, which can be used in the template if needed
+    context = {
+        "request": request,
+        "kakao_map_app_key": kakao_map_app_key,
+        "disaster_id": disaster_id,
+    }
+
+    try:
+        # Check if the template exists before trying to render
+        template_path = templates_dir / template_name
+        if not template_path.is_file():
+            logging.warning(f"Map template file not found at: {template_path}")
+            raise HTTPException(status_code=404, detail=f"Map template '{template_name}' not found.")
+            
+        return templates.TemplateResponse(template_name, context)
+    except Exception as e:
+        logging.error(f"Error rendering template {template_name} with disaster_id {disaster_id}: {e}", exc_info=True)
+        # Re-raise a generic 404 if the template wasn't found, otherwise 500
+        if isinstance(e, HTTPException) and e.status_code == 404:
+             raise e
+        raise HTTPException(status_code=500, detail=f"Error rendering map template '{template_name}' with ID '{disaster_id}'")
 
 # --- Frontend Serving (Catch-all for React Router) --- 
 @app.get("/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)

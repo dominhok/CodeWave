@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emergency Evacuation Route</title>
+    <script type="text/javascript" src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=3sl6kwcsrc&language=en"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        body {
+            background-color: #f3eefc; /* Pink background tone */
+            color: #264a39; /* Dark green text */
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 10px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 10px;
+            padding: 12px 18px; /* Increased from 10px 15px (1.2x vertical) */
+            background: rgba(0, 134, 110, 0.1); /* Light green background */
+            border-radius: 8px;
+            border: 1px solid rgba(0, 134, 110, 0.2);
+            font-size: 1.1em; /* Increase all text in header by 1.1x */
+        }
+
+        .header h1 {
+            font-size: 1.3em;
+            color: #00866e; /* Main green tone */
+            margin-bottom: 5px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .header p {
+            color: #264a39; /* Dark green for text */
+            font-size: 0.9em;
+            font-weight: 500;
+            margin-bottom: 0;
+            line-height: 1.3;
+        }
+
+        .header p strong {
+            color: #00866e; /* Main green tone */
+            font-weight: 600;
+        }
+
+        .header strong {
+            font-size: 1.24em; /* This already has a specific size, so keeping relative */
+            color: #00866e; /* Main green tone */
+            font-weight: 700;
+        }
+
+        .emergency-info {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            margin-top: 12px;
+            font-size: 1em;
+            color: #000000; /* Lighter green for info */
+            font-weight: 600; /* Make text bolder */
+        }
+
+        .emergency-info span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        #map {
+            width: 100%;
+            height: 550px; /* Increased map height from 500px to 550px */
+            border-radius: 8px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 10px rgba(38, 74, 57, 0.1); /* Green shadow */
+            border: 1px solid #f2eaf3; /* Light pink border */
+        }
+
+        .info-window {
+            padding: 8px 12px;
+            font-size: 13px;
+            color: #264a39; /* Dark green text */
+            background: #f3ebf5; /* Light pink background */
+            border-radius: 6px;
+            font-weight: 600;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+            border: 1px solid #f2eaf3; /* Light pink border */
+        }
+
+        #goBtn {
+            display: none;
+            width: 100%;
+            padding: 18px 24px;
+            font-size: 1.3em; /* Increased from 1.1em to 1.3em */
+            color: white;
+            background-color: #00866e; /* Main green tone */
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            text-align: center;
+            transition: all 0.3s;
+            margin-top: 10px;
+            box-shadow: 0 4px 8px rgba(0, 134, 110, 0.2); /* Green shadow */
+            font-weight: 800; /* Increased from 700 to 800 */
+        }
+
+        #goBtn:hover {
+            background-color: #264a39; /* Darker green on hover */
+            transform: translateY(-1px);
+        }
+
+        #emergencyInfoBtn {
+            display: none; 
+            width: 100%; 
+            padding: 18px 24px; 
+            font-size: 1.3em; /* Increased from 1.1em to 1.3em */
+            color: white; 
+            background-color: #FF3B30; /* Red color for emergency */
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            margin-top: 10px; 
+            box-shadow: 0 4px 8px rgba(255, 59, 48, 0.2); /* Red shadow */
+            font-weight: 800; /* Increased from 700 to 800 */
+        }
+        
+        #emergencyInfoBtn:hover {
+            background-color: #E02D26; /* Darker red on hover */
+            transform: translateY(-1px);
+        }
+
+        .emergency-alert {
+            background: #00866e; /* Main green tone */
+            color: white;
+            padding: 10px 15px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.8em;
+            box-shadow: 0 4px 8px rgba(0, 134, 110, 0.2); /* Green shadow */
+            letter-spacing: -0.3px;
+        }
+
+        .emergency-alert span {
+            margin-right: 8px;
+            font-size: 1.1em;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.01); }
+            100% { transform: scale(1); }
+        }
+
+        #goBtn, #emergencyInfoBtn {
+            animation: pulse 2s infinite;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 5px;
+            }
+            .header h1 {
+                font-size: 1.2em;
+            }
+            #map {
+                height: 60vh; /* Increased from 50vh to 60vh */
+                min-height: 400px; /* Increased from 350px to 400px */
+            }
+            #goBtn, #emergencyInfoBtn {
+                font-size: 1.2em; /* Increased from 1em to 1.2em */
+                padding: 18px 23px;
+            }
+            .emergency-alert {
+                font-size: 0.8em;
+                padding: 10px 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <strong id="disaster-type">disaster</strong> in <strong id="disaster-location">Gangnam-gu, Seoul</strong><br></p>
+            <div class="emergency-info">
+                <span>Occurrence Time: <span id="disaster-time">--:--</span></span>
+                <span>Disaster Distance: <span id="disaster-distance">3.72km</span></span>
+            </div>
+        </div>
+        <div id="map"></div>
+        <a id="goBtn" href="#" target="_blank">
+            🚶‍♂️ Route to Nearest Shelter
+        </a>
+        <button id="emergencyInfoBtn">
+            ☎️ Emergency Call
+        </button>
+    </div>
+
+    <script>
+        
+        let currentLocation = {
+            lat: 37.563456,
+            lng: 127.036372
+        };
+        // API로부터 재난 정보 가져오기
+        const getDisasterInfo = async () => {
+            try {
+                // URL에서 disaster_id 추출 (path 기반 - /map/disaster_map/earthquake_gangnam)
+                let disasterId = null;
+                
+                // URL 경로 분석
+                const pathSegments = window.location.pathname.split('/');
+                // 마지막 세그먼트가 disaster_id이면 사용
+                // URL path 형식: /map/disaster_map/earthquake_gangnam
+                if (pathSegments.length >= 4 && pathSegments[2] === 'disaster_map') {
+                    disasterId = pathSegments[3];
+                } else {
+                    // 기존 쿼리 파라미터 방식도 백업으로 지원
+                    const urlParams = new URLSearchParams(window.location.search);
+                    disasterId = urlParams.get('id');
+                }
+                
+                // API 엔드포인트 URL 설정 (ID가 있으면 해당 ID 사용, 없으면 기본값)
+                const apiUrl = disasterId 
+                    ? `/api/disaster/${disasterId}` 
+                    : '/api/disaster/';
+                
+                console.log(`Fetching disaster info from: ${apiUrl}`);
+                
+                // API 호출
+                const response = await fetch(apiUrl);
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                // JSON 응답 파싱
+                const data = await response.json();
+                console.log('Disaster data:', data);
+                
+                // API에서 받은 데이터 반환
+                return {
+                    location: data.location,
+                    type: data.type,
+                    scale: data.scale || 'N/A',
+                    time: data.time || '--:--',
+                    coordinates: {
+                        lat: data.coordinates.lat,
+                        lng: data.coordinates.lng
+                    },
+                    radius: data.radius || 2000
+                };
+            } catch (error) {
+                console.error('Error fetching disaster info:', error);
+                // 오류 발생 시 기본값 반환
+                return {
+                    location: 'Unknown Location',
+                    type: 'Unknown Disaster',
+                    scale: 'N/A',
+                    time: '--:--',
+                    coordinates: { lat: 37.5665, lng: 126.9780 }, // Default to Seoul City Hall
+                    radius: 2000
+                };
+            }
+        };
+
+        // API로부터 받아올 대피소 정보 (Flask 프록시 사용)
+        const getShelterInfo = async (currentLocation) => {
+            const range = 0.1; // You can adjust this range if needed
+            const startLat = currentLocation.lat - range;
+            const endLat = currentLocation.lat + range;
+            const startLot = currentLocation.lng - range;
+            const endLot = currentLocation.lng + range;
+
+            // Call your Flask proxy route
+            const proxyUrl = `/api/shelters_proxy?startLat=${startLat}&endLat=${endLat}&startLot=${startLot}&endLot=${endLot}`;
+
+            console.log(`Fetching shelters via proxy: ${proxyUrl}`);
+
+            try {
+                // Fetch from your own server's proxy endpoint
+                const response = await fetch(proxyUrl);
+                if (!response.ok) {
+                    // Handle errors reported by your proxy (e.g., 400, 500, 502)
+                    const errorData = await response.json();
+                    throw new Error(`Proxy request failed: ${errorData.error || response.statusText}`);
+                }
+                const data = await response.json(); // Data is already parsed by Flask jsonify
+
+                console.log('Shelter Proxy Response:', data);
+
+                // The rest of the logic remains the same: check header, find closest, etc.
+                if (data.header.resultCode !== '00') {
+                    throw new Error(`API Error via Proxy: ${data.header.resultMsg} (${data.header.resultCode})`);
+                }
+
+                if (!data.body || data.totalCount === 0) {
+                     console.warn('No shelters found in the vicinity via proxy.');
+                     return null; // Return null if none found
+                }
+
+                let closestShelter = null;
+                let minDistance = Infinity;
+
+                data.body.forEach(shelter => {
+                    const shelterLat = parseFloat(shelter.LAT);
+                    const shelterLng = parseFloat(shelter.LOT);
+                    // Ensure calculateDistance is defined correctly elsewhere in your script
+                    const distance = calculateDistance(currentLocation.lat, currentLocation.lng, shelterLat, shelterLng);
+
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        closestShelter = {
+                            id: shelter.MNG_SN,
+                            name: shelter.REARE_NM,
+                            type: shelter.SHLT_SE_NM,
+                            address: shelter.RONA_DADDR,
+                            lat: shelterLat,
+                            lng: shelterLng
+                        };
+                    }
+                });
+
+                 if (!closestShelter) {
+                     console.warn('Could not determine closest shelter from proxy results.');
+                     return null;
+                 }
+
+                console.log(`Closest shelter found via proxy: ${closestShelter.name} at ${minDistance.toFixed(2)}km`);
+                return closestShelter;
+
+            } catch (error) {
+                console.error('Error fetching shelter info via proxy:', error);
+                alert('Failed to fetch shelter information. Please try again later.');
+                return null; // Return null on error
+            }
+        };
+
+        // 거리 계산 함수 (Haversine formula)
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+
+        // 위치 정보 가져오기
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(async function(position) {
+                try {
+                    // 1. 현재 위치 정보
+                    currentLocation = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude
+                    };
+                    console.log('Current Location:', currentLocation);
+
+                    // 2. API에서 재난 정보 가져오기
+                    const disasterInfo = await getDisasterInfo();
+                    console.log('Disaster Info:', disasterInfo);
+                    
+                    // 3. 로컬 더미 데이터에서 가장 가까운 대피소 가져오기
+                    const shelterInfo = await getShelterInfo(currentLocation); // Pass currentLocation again
+                    console.log('Closest Shelter Info:', shelterInfo);
+
+                    // 4. 지도 초기화
+                    const map = new naver.maps.Map('map', {
+                        center: new naver.maps.LatLng(currentLocation.lat, currentLocation.lng),
+                        zoom: 13,
+                        scaleControl: false,
+                        mapDataControl: false,
+                        zoomControl: false,
+                        mapTypeControl: false,
+                        language: 'en'
+                    });
+
+                    // 5. 현재 위치 마커
+                    const currentMarker = new naver.maps.Marker({
+                        position: new naver.maps.LatLng(currentLocation.lat, currentLocation.lng),
+                        map: map,
+                        icon: {
+                            content: `
+                                <div style="position:relative;white-space:nowrap;">
+                                    <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);">
+                                        <div style="width:20px;height:20px;background:#544541;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></div>
+                                    </div>
+                                    <div style="position:absolute;bottom:25px;left:50%;transform:translateX(-50%);background:#544541;color:white;padding:8px 12px;border-radius:6px;font-size:13px;font-weight:bold;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                        😶 You are here!
+                                    </div>
+                                </div>
+                            `,
+                            anchor: new naver.maps.Point(10, 10)
+                        },
+                        title: 'Current Location',
+                        zIndex: 100
+                    });
+
+                    // 6. 재난 발생 지점 마커
+                    const disasterMarker = new naver.maps.Marker({
+                        position: new naver.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng),
+                        map: map,
+                        icon: {
+                            content: `
+                                <div style="position:relative;white-space:nowrap;">
+                                    <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);">
+                                        <div style="width:20px;height:20px;background:#FF3B30;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></div>
+                                    </div>
+                                    <div style="position:absolute;bottom:25px;left:50%;transform:translateX(-50%);background:#FF3B30;color:white;padding:8px 12px;border-radius:6px;font-size:13px;font-weight:bold;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                        ⚠️ Disaster Point
+                                    </div>
+                                </div>
+                            `,
+                            anchor: new naver.maps.Point(10, 10)
+                        },
+                        title: 'Disaster Point',
+                        zIndex: 99
+                    });
+                    // 7. 가장 가까운 대피소 마커 생성 (하나만)
+                    let shelterMarker = null; // Use let as it might be null
+                    if (shelterInfo) { // Check if a closest shelter was found
+                        console.log("Creating shelter marker with name:", shelterInfo.name);
+                        
+                        // Create custom HTML marker with shelter name
+                        shelterMarker = new naver.maps.Marker({
+                            position: new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng),
+                            map: map,
+                            visible: false,
+                            icon: {
+                                content: `
+                                    <div style="position:relative;white-space:nowrap;">
+                                        <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);">
+                                            <div style="width:20px;height:20px;background:#00866e;border-radius:50%;border:2px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></div>
+                                        </div>
+                                        <div style="position:absolute;bottom:25px;left:50%;transform:translateX(-50%);background:#00866e;color:white;padding:8px 12px;border-radius:6px;font-size:13px;font-weight:bold;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,0.2);">
+                                            🍀 Shelter
+                                        </div>
+                                    </div>
+                                `,
+                                anchor: new naver.maps.Point(10, 10)
+                            },
+                            zIndex: 98
+                        });
+                        
+                        // Add debug listener to check when marker becomes visible
+                        naver.maps.Event.addListener(shelterMarker, 'visible_changed', function() {
+                            console.log("Shelter marker visibility changed to:", shelterMarker.getVisible());
+                        });
+                    } else {
+                        console.log("No closest shelter found or dummy data empty.");
+                    }
+
+                    [currentMarker, disasterMarker, shelterMarker].filter(marker => marker).forEach(marker => {
+                        naver.maps.Event.addListener(marker, 'click', function() {
+                            // 클릭된 마커를 최상단으로 올림
+                            if (currentMarker) currentMarker.setZIndex(98);
+                            if (disasterMarker) disasterMarker.setZIndex(98);
+                            if (shelterMarker) shelterMarker.setZIndex(98);
+                            marker.setZIndex(101);
+                        });
+                    });
+
+                    // 8. 위험 반경 표시
+                    new naver.maps.Circle({
+                        map: map,
+                        center: new naver.maps.LatLng(disasterInfo.coordinates.lat, disasterInfo.coordinates.lng),
+                        radius: disasterInfo.radius,
+                        strokeWeight: 1,
+                        strokeColor: '#FF3B30',
+                        strokeOpacity: 0.7,
+                        strokeStyle: 'solid',
+                        fillColor: '#FF3B30',
+                        fillOpacity: 0.15
+                    });
+
+                    // 9. 지도 영역 설정 - 처음에는 재난 반경을 중심으로 설정
+                    const initialBounds = new naver.maps.LatLngBounds(
+                        new naver.maps.LatLng(
+                            disasterInfo.coordinates.lat - disasterInfo.radius / 111000 * 1.2, // 남쪽 경계 (약간 여유 추가)
+                            disasterInfo.coordinates.lng - disasterInfo.radius / (111000 * Math.cos(disasterInfo.coordinates.lat * Math.PI / 180)) * 1.2 // 서쪽 경계
+                        ),
+                        new naver.maps.LatLng(
+                            disasterInfo.coordinates.lat + disasterInfo.radius / 111000 * 1.2, // 북쪽 경계
+                            disasterInfo.coordinates.lng + disasterInfo.radius / (111000 * Math.cos(disasterInfo.coordinates.lat * Math.PI / 180)) * 1.2 // 동쪽 경계
+                        )
+                    );
+                    
+                    // 재난 반경이 꽉 차도록 지도 초기화
+                    map.fitBounds(initialBounds);
+
+                    // 재난 반경에 따른 적절한 줌 레벨 계산 함수
+                    const calculateZoomFromRadius = (radius) => {
+                        // 반경에 따른 줌 레벨 계산 (반경이 클수록 줌 레벨은 작아짐)
+                        // 1km = 약 줌레벨 14, 5km = 약 줌레벨 12, 10km = 약 줌레벨 10
+                        const baseZoom = 15; // 기준 줌 레벨
+                        const radiusInKm = radius / 1000;
+                        
+                        // 로그 스케일로 줌 레벨 계산 (반경이 커질수록 더 많이 줌아웃)
+                        const zoomAdjustment = Math.log2(radiusInKm) * 1.5;
+                        const calculatedZoom = baseZoom - zoomAdjustment;
+                        
+                        // 줌 레벨 범위 제한 (최소 7, 최대 18)
+                        return Math.min(Math.max(Math.round(calculatedZoom), 7), 18);
+                    };
+                    
+                    // 재난 반경에 따른 줌 레벨 계산
+                    const disasterBasedZoom = calculateZoomFromRadius(disasterInfo.radius);
+                    console.log("Disaster-based zoom level:", disasterBasedZoom);
+
+                    
+
+                    // 네비게이션 버튼 설정
+                    const goBtn = document.getElementById('goBtn');
+                    if (shelterInfo) {
+                        goBtn.addEventListener('click', function (e) {
+                            e.preventDefault();
+
+                            // 현재 위치와 대피소 정보 가져오기 (동적 값 사용)
+                            const startLat = currentLocation.lat;
+                            const startLng = currentLocation.lng;
+                            const goalLat = shelterInfo.lat;
+                            const goalLng = shelterInfo.lng;
+                            const goalName = shelterInfo.name;
+
+                            // Naver 지도 길찾기 URL 생성 (경로 파라미터 사용)
+                            const startNameEncoded = encodeURIComponent('Current Location');
+                            const goalNameEncoded = encodeURIComponent(goalName);
+
+                            // Lng, Lat 순서 확인
+                            const naverMapUrl = `https://map.naver.com/v5/directions/${startLng},${startLat},${startNameEncoded}/${goalLng},${goalLat},${goalNameEncoded}/-/walk`; // 도보 경로 기본 지정
+
+                            console.log("Naver Map URL:", naverMapUrl); // 생성된 URL 확인용 로그
+
+                            // 새 탭에서 Naver 지도 길찾기 열기
+                            window.open(naverMapUrl, '_blank');
+                        });
+                        goBtn.style.display = 'block';
+
+                        // 3초 후 대피소 방향으로 지도 전환
+                        setTimeout(() => {
+                            // 현재 위치와 대피소 사이의 중간 지점 계산
+                            const centerLat = (currentLocation.lat + shelterInfo.lat) / 2;
+                            const centerLng = (currentLocation.lng + shelterInfo.lng) / 2;
+                            
+                            // 대피소 마커 표시
+                            shelterMarker.setVisible(true);
+                            
+                            // 경로가 보이는 경계 설정 (현재 위치와 대피소를 모두 포함하고 약간의 여유 공간)
+                            const routeBounds = new naver.maps.LatLngBounds();
+                            routeBounds.extend(new naver.maps.LatLng(currentLocation.lat, currentLocation.lng));
+                            routeBounds.extend(new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng));
+                            
+                            // 모바일에서 잘 보이도록 여백 추가
+                            routeBounds.extend(new naver.maps.LatLng(
+                                Math.min(currentLocation.lat, shelterInfo.lat) - 0.003,
+                                Math.min(currentLocation.lng, shelterInfo.lng) - 0.003
+                            ));
+                            routeBounds.extend(new naver.maps.LatLng(
+                                Math.max(currentLocation.lat, shelterInfo.lat) + 0.003,
+                                Math.max(currentLocation.lng, shelterInfo.lng) + 0.003
+                            ));
+                            
+                            // 부드러운 전환을 위해 morph 사용 - 중간 지점으로 이동 후 적절한 줌 레벨 적용
+                            // 훨씬 더 가까이 확대하여 경로를 명확하게 보이게 함
+                            const routeZoom = disasterBasedZoom + 5; // 더 큰 확대 수준 (2에서 4로 증가)
+                            console.log("Route zoom level:", routeZoom);
+                            
+                            map.morph(new naver.maps.LatLng(centerLat, centerLng), routeZoom, {
+                                duration: 3000, // 전환 시간 길게 (2500ms에서 3000ms로)
+                                easing: 'easeOutCubic' // 부드러운 전환을 위한 easing 함수
+                            });
+                            
+                            // 경로가 보이도록 bounds 적용 (필요한 경우에만)
+                            setTimeout(() => {
+                                // 현재 보이는 영역에 경로가 모두 포함되어 있는지 확인
+                                const currentBounds = map.getBounds();
+                                if (!currentBounds.hasLatLng(new naver.maps.LatLng(currentLocation.lat, currentLocation.lng)) || 
+                                    !currentBounds.hasLatLng(new naver.maps.LatLng(shelterInfo.lat, shelterInfo.lng))) {
+                                    map.fitBounds(routeBounds, {
+                                        top: 50,
+                                        right: 50,
+                                        bottom: 50,
+                                        left: 50
+                                    });
+                                }
+                            }, 2600); // 첫 번째 transition이 끝난 후 bounds 확인
+    
+                            
+                        }, 3000);
+                    }
+
+                    // 거리 정보 업데이트
+                    const distanceToDisaster = calculateDistance(
+                        currentLocation.lat,
+                        currentLocation.lng,
+                        disasterInfo.coordinates.lat,
+                        disasterInfo.coordinates.lng
+                    );
+                    
+                    // 1km 미만이면 m로 표기, 그 이상이면 km로 표기
+                    if (distanceToDisaster < 1) {
+                        const distanceInMeters = Math.round(distanceToDisaster * 1000);
+                        document.getElementById('disaster-distance').textContent = `${distanceInMeters}m`;
+                    } else {
+                        document.getElementById('disaster-distance').textContent = `${distanceToDisaster.toFixed(1)}km`;
+                    }
+                    
+                    document.getElementById('disaster-location').textContent = disasterInfo.location;
+                    document.getElementById('disaster-type').textContent = disasterInfo.type;
+                    document.getElementById('disaster-time').textContent = disasterInfo.time; // Display disaster time
+
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Error loading disaster or shelter information.');
+                }
+                
+                // Emergency Info 버튼 설정 - try-catch 블록 밖으로 이동하여 항상 사용 가능하도록 함
+                const emergencyInfoBtn = document.getElementById('emergencyInfoBtn');
+                
+                emergencyInfoBtn.onclick = async function() {
+                    try {
+                        // Get disaster ID from URL
+                        let disasterId = null;
+                        
+                        // URL 경로 분석
+                        const pathSegments = window.location.pathname.split('/');
+                        // URL path 형식: /map/disaster_map/earthquake_gangnam
+                        if (pathSegments.length >= 4 && pathSegments[2] === 'disaster_map') {
+                            disasterId = pathSegments[3];
+                        } else {
+                            // 기존 쿼리 파라미터 방식도 백업으로 지원
+                            const urlParams = new URLSearchParams(window.location.search);
+                            disasterId = urlParams.get('id');
+                        }
+                        
+                        // Use default if no id found
+                        if (!disasterId) {
+                            disasterId = 'default';
+                        }
+                        
+                        // Call the API endpoint
+                        const response = await fetch(`/api/emergency_info/${disasterId}`);
+                        
+                        if (!response.ok) {
+                            throw new Error(`API error: ${response.status}`);
+                        }
+                        
+                        const data = await response.json();
+                        console.log('Emergency Info:', data);
+                        
+                        // Format the data for display
+                        let alertMessage = '===== EMERGENCY INFORMATION =====\n\n';
+                        
+                        // Add emergency contacts
+                        alertMessage += '📞 EMERGENCY CONTACTS:\n';
+                        for (const [contact, number] of Object.entries(data.emergency_contacts)) {
+                            alertMessage += `- ${contact.replace('_', ' ').toUpperCase()}: ${number}\n`;
+                        }
+                        
+                        // Add safety instructions
+                        alertMessage += '\n⚠️ SAFETY INSTRUCTIONS:\n';
+                        data.safety_instructions.forEach((instruction, index) => {
+                            alertMessage += `${index + 1}. ${instruction}\n`;
+                        });
+                        
+                        // Add evacuation centers
+                        alertMessage += '\n🏨 EVACUATION CENTERS:\n';
+                        data.evacuation_centers.forEach((center, index) => {
+                            alertMessage += `${index + 1}. ${center}\n`;
+                        });
+                        
+                        // Add general advice
+                        alertMessage += `\n${data.general_advice}`;
+                        
+                        // Show alert with the information
+                        alert(alertMessage);
+                        
+                    } catch (error) {
+                        console.error('Error fetching emergency info:', error);
+                        alert('Emergency information is currently unavailable. Please call 119 for emergencies.');
+                    }
+                };
+                emergencyInfoBtn.style.display = 'block';
+            }, function(error) {
+                alert('Cannot get your location. Please check your location permission settings.');
+            });
+        } else {
+            alert('Geolocation is not supported by this browser.');
+        }
+    </script>
+</body>
+</html> 
