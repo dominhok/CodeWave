@@ -1,0 +1,15 @@
+fastapi==0.115.12
+httpx==0.28.1
+langchain==0.3.23
+langchain_upstage==0.6.0
+pydantic==2.11.3
+Requests==2.32.3
+SQLAlchemy==2.0.40
+twilio==9.5.2
+urllib3==2.4.0
+uvicorn==0.34.0
+python-dotenv
+Jinja2
+faiss-cpu
+langchain-community
+python-multipart

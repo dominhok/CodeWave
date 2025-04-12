@@ -23,30 +23,36 @@
         return;
       }
 
-      // CORS 우회 URL (CORS Anywhere 사용)
-      const proxyUrl = 'https://cors-anywhere.herokuapp.com/';
-      const apiUrl = `https://www.safetydata.go.kr/V2/api/DSSP-IF-10941?serviceKey=${encodeURIComponent('4NJY4E848O20G443')}&region=${encodeURIComponent(region)}&numOfRows=10&page=1`;
+      // Call the backend proxy endpoint instead of the external API directly
+      const backendApiUrl = `/api/shelters?region=${encodeURIComponent(region)}&rows=10&page=1`;
 
-      // 대피소 정보를 API에서 받아오기
-      fetch(proxyUrl + apiUrl)
-        .then(response => response.json())
+      fetch(backendApiUrl)
+        .then(response => {
+          if (!response.ok) {
+            // Handle HTTP errors from the backend proxy
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          return response.json();
+        })
         .then(data => {
-          console.log(data);  // 응답 데이터를 출력하여 확인합니다.
-          
+          console.log("Data from backend:", data); // Log data received from backend
+
+          // Process the data structure returned by the backend proxy
+          // Assuming the backend returns the original structure from safetydata.go.kr
           if (data.response && data.response.header && data.response.header.resultCode === "00") {
             const shelters = data.response.body.items;
             const shelterListDiv = document.getElementById('shelter-list');
-            shelterListDiv.innerHTML = '';  // 이전 결과 지우기
+            shelterListDiv.innerHTML = '';
             
-            if (shelters.length === 0) {
+            if (!shelters || shelters.length === 0) { // Check if shelters is undefined or empty
               shelterListDiv.innerHTML = '<p>대피소 정보가 없습니다.</p>';
             } else {
-              shelters.forEach(shelter => {
+              shelters.forEach(item => { // Renamed shelter to item to match safetydata response
                 const shelterInfo = `
                   <div style="margin-bottom: 15px;">
-                    <h3>${shelter.shelterName}</h3>
-                    <p>위도: ${shelter.latitude}, 경도: ${shelter.longitude}</p>
-                    <p>주소: ${shelter.address}</p>
+                    <h3>${item.vt_acmdfclty_nm}</h3> <!-- Use correct field names -->
+                    <p>주소: ${item.dtl_adres}</p>
+                    <p>수용가능인원: ${item.fclty_ar}명</p>
                     <hr>
                   </div>
                 `;
@@ -54,13 +60,14 @@
               });
             }
           } else {
-            console.error('API 응답 실패:', data.response ? data.response.header.resultMsg : '응답 데이터가 없습니다.');
-            alert('대피소 데이터를 가져오는 데 실패했습니다.');
+            const errorMsg = data.response?.header?.resultMsg || data.detail || '알 수 없는 API 오류';
+            console.error('API 응답 실패:', errorMsg);
+            alert(`대피소 데이터를 가져오는 데 실패했습니다: ${errorMsg}`);
           }
         })
         .catch(error => {
           console.error('API 요청 중 오류가 발생했습니다:', error);
-          alert('대피소 데이터를 가져오는 중 오류가 발생했습니다.');
+          alert(`대피소 데이터를 가져오는 중 오류가 발생했습니다: ${error.message}`);
         });
     }
   </script>

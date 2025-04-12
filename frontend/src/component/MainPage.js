@@ -46,15 +46,14 @@ function MainPage() {
   const [formData, setFormData] = useState({
     personType: "",
     address: "",
-    phone: "",
-    guardian: false,
-    callRequest: false,
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
 
   // 입력 값 변경 핸들러
   const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-
+    const { name, value } = e.target;
     setFormData((prevData) => ({
       ...prevData,
       [name]: type === "checkbox" ? checked : value,
@@ -65,7 +64,6 @@ function MainPage() {
   const handleSubmit = (e) => {
     e.preventDefault(); // 기본 폼 제출 동작 방지
     console.log("Submitted Data:", formData); // 콘솔에 데이터 출력
-    console.log("Submitted Data (JSON):", JSON.stringify(formData, null, 2)); // JSON 형태로 콘솔 출력
   };
 
   return (
@@ -170,118 +168,97 @@ function MainPage() {
       </section>
 
       <section ref={contactSectionRef} className="contact-section">
-  <div className="contact-container">
+        <div className="contact-container">
+          {/* 왼쪽 입력 폼 */}
+          <div className="input-section">
+            <h1>Contact Us</h1>
+            <form className="contact-form" onSubmit={handleSubmit}>
+              {/* 전화번호 입력 */}
+              <div className="form-group">
+                <label htmlFor="phone">Phone Number</label>
+                <div className="phone-input">
+                  <select
+                    id="country-code"
+                    name="phone"
+                    value={formData.phone}
+                    onChange={handleChange}
+                  >
+                    <option value="+82">South Korea (+82)</option>
+                    <option value="+1">United States (+1)</option>
+                  </select>
+                  <input
+                    type="tel"
+                    id="phone"
+                    name="phone"
+                    placeholder="Enter your phone number"
+                    required
+                    onChange={handleChange}
+                  />
+                </div>
+              </div>
 
-    {/* Left Input Form */}
-    <div className="input-section">
-      <h1>Contact Us</h1>
-      <form className="contact-form" onSubmit={handleSubmit}>
+              {/* 이메일 입력 */}
+              <div className="form-group">
+                <label htmlFor="email">Email</label>
+                <input
+                  type="email"
+                  id="email"
+                  name="email"
+                  placeholder="Enter your email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  required
+                />
+              </div>
 
-        {/* Who you are (Dropdown) */}
-        <div className="form-group">
-          <label htmlFor="personType">Who are you?</label>
-          <select
-            id="personType"
-            name="personType"
-            value={formData.personType}
-            onChange={handleChange}
-            required
-          >
-            <option value="" disabled selected>Select your situation</option>
-            <option value="elderly">Elderly / Living Alone / Pregnant / Guardian of Infant / Mobility Issues</option>
-            <option value="visual">Visually Impaired</option>
-            <option value="hearing">Hearing Impaired</option>
-            <option value="foreigner">Foreigner / Refugee</option>
-            <option value="other">Other</option>
-          </select>
+              {/* 장애 여부 선택 */}
+              <div className="form-group">
+                <label htmlFor="disability">Disability Status</label>
+                <select
+                  id="disability"
+                  name="disability"
+                  value={formData.disability}
+                  onChange={handleChange}
+                >
+                  <option value="">Select an option</option>
+                  <option value="visual">Visual Impairment</option>
+                  <option value="hearing">Hearing Impairment</option>
+                  <option value="mobility">Mobility Difficulty</option>
+                </select>
+              </div>
+
+              {/* 집 주소 입력 */}
+              <div className="form-group">
+                <label htmlFor="address">Home Address</label>
+                <textarea
+                  id="address"
+                  name="address"
+                  rows="3"
+                  placeholder="Enter your full address"
+                  value={formData.address}
+                  onChange={handleChange}
+                  required
+                ></textarea>
+              </div>
+
+              {/* 제출 버튼 */}
+              <button type="submit">Submit &gt;&gt;</button>
+            </form>
+          </div>
+
+          {/* 오른쪽 이미지 영역 */}
+          <div className="image-section">
+            <img src={contact} alt="Contact Us" />
+          </div>
         </div>
-
-        {/* Address */}
-        <div className="form-group">
-          <label htmlFor="address">Address</label>
-          <input
-            type="text"
-            id="address"
-            name="address"
-            placeholder="Enter your full residential address"
-            value={formData.address}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        {/* International Phone Number */}
-        <div className="form-group">
-          <label htmlFor="phone">Phone Number (International)</label>
-          <input
-            type="tel"
-            id="phone"
-            name="phone"
-            placeholder="e.g., +82 10-1234-5678"
-            value={formData.phone}
-            onChange={handleChange}
-            required
-          />
-        </div>
-
-        {/* Guardian Connection */}
-        <div className="form-group">
-          <label>
-            <input
-              type="checkbox"
-              name="hasGuardian"
-              checked={formData.hasGuardian}
-              onChange={(e) => setFormData({ ...formData, hasGuardian: e.target.checked })}
-            />
-            &nbsp;I would like to connect a guardian
-          </label>
-          {formData.hasGuardian && (
-            <input
-              type="tel"
-              name="guardianPhone"
-              placeholder="Guardian's phone number (e.g., +82 10-0000-0000)"
-              value={formData.guardianPhone}
-              onChange={handleChange}
-              className="guardian-phone"
-            />
-          )}
-        </div>
-
-        {/* Request Phone Guidance */}
-        <div className="form-group">
-          <label>
-            <input
-              type="checkbox"
-              name="needCall"
-              checked={formData.needCall}
-              onChange={(e) => setFormData({ ...formData, needCall: e.target.checked })}
-            />
-            &nbsp;I would like a guidance call from a support agent
-          </label>
-        </div>
-
-        {/* Submit Button */}
-        <button type="submit">Submit &gt;&gt;</button>
-      </form>
-    </div>
-
-    {/* Right Image Section - Unchanged */}
-    <div className="image-section">
-      <img src={contact} alt="Contact Us" />
-    </div>
-
-  </div>
-</section>
-
+      </section>
 
       <footer className="footer-section">
         <div className="footer-container">
-          {/* 왼쪽 영역 */}
           <div className="footer-left">
             <h3>Code Wave</h3>
           </div>
 
-          {/* 오른쪽 영역 */}
           <div className="footer-right">
             <ul>
               <li>
@@ -297,8 +274,8 @@ function MainPage() {
         </div>
       </footer>
 
-  </div>
+    </div>
   );
 }
-//           <img src={gpsImage} alt="Contact Us"/>
+
 export default MainPage;

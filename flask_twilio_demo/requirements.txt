@@ -1,5 +1,0 @@
-flask
-twilio
-requests
-pydub
-SpeechRecognition
