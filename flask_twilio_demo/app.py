@@ -37,6 +37,17 @@ from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_community.document_loaders import DirectoryLoader # Using community loader
 
+# --- Added for Claude 3.5 via LangChain ---
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, SystemMessage # Corrected import for Pydantic v2 based Langchain Core
+# -------------------------------------------
+
+# --- Constants ---
+MESSAGE_HISTORY = {} # {phone_number: [(timestamp, user_message, bot_response), ...]}
+HISTORY_LIMIT = 5
+VECTORSTORE_PATH = "flask_twilio_demo/vectorstore_db"
+# --- End Constants ---
+
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -343,56 +354,63 @@ def translate_ko_to_en(text: str) -> Optional[str]:
         logging.error(f"Error during Upstage translation KO>EN: {e}", exc_info=True)
         return None
 
-# --- LLM Based Voice Response Interpretation (Using Anthropic Claude) --- 
+# --- LLM Based Voice Response Interpretation (Using LangChain Anthropic) --- # Modified function signature documentation
 def interpret_voice_response(speech_text: str, alert_context: str) -> int:
     """
-    Analyzes the user's voice response using Anthropic Claude to determine if follow-up is needed.
+    Analyzes the user's voice response using LangChain with Anthropic Claude 3.5 Sonnet
+    to determine if follow-up is needed.
     Returns 1 if report/assistance needed, 0 otherwise.
     """
     if not speech_text:
         logging.debug("Interpret request skipped: Empty speech text.")
         return 0
-    
+
+    # ANTHROPIC_API_KEY is read automatically by ChatAnthropic from environment variables
     anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
     if not anthropic_api_key:
-        logging.error("ANTHROPIC_API_KEY not found in environment variables. Cannot interpret voice response.")
-        return 0
-        
+         logging.error("ANTHROPIC_API_KEY not found in environment variables. Cannot interpret voice response.")
+         # Explicitly return here as ChatAnthropic might raise an error later if key is missing
+         return 0
+
     try:
-        client = anthropic.Anthropic(api_key=anthropic_api_key)
+        # Initialize LangChain ChatAnthropic with Claude 3.5 Sonnet
+        llm = ChatAnthropic(model="claude-3-5-sonnet-20240620", max_tokens=5, temperature=0.0) # Added temperature for consistency
 
-        prompt = f"""Task: Analyze the user's voice response regarding a disaster alert. Determine if the user wants to report something specific, needs help, or is indicating an emergency situation requiring follow-up. Output ONLY '1' if a report or assistance is needed, otherwise output ONLY '0'.
+        # Prepare messages for LangChain invoke
+        system_prompt = "Task: Analyze the user's voice response regarding a disaster alert. Determine if the user wants to report something specific, needs help, or is indicating an emergency situation requiring follow-up. Output ONLY '1' if a report or assistance is needed, otherwise output ONLY '0'."
+        human_prompt = f"Original Alert Context (for reference): {alert_context}\\nUser's Voice Response: {speech_text}\\n\\nOutput (1 or 0):"
 
-Original Alert Context (for reference): {alert_context}
-User's Voice Response: {speech_text}
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_prompt)
+        ]
 
-Output (1 or 0):"""
-        
-        # Log the request being sent to Claude
-        logging.info(f"Invoking Anthropic Claude to interpret voice response...")
+        # Log the request being sent to Claude via LangChain
+        logging.info(f"Invoking LangChain Anthropic (Claude 3.5 Sonnet) to interpret voice response...")
         logging.info(f"  User Response Sent: '{speech_text}'")
-        # logging.debug(f"  Full Prompt Sent:\n{prompt}") # Log full prompt only in debug
+        # logging.debug(f"  Full Prompt Context:\\nSystem: {system_prompt}\\nHuman: {human_prompt}") # Debug log if needed
 
-        message = client.messages.create(
-            model="claude-3-haiku-20240307", # Use Haiku for speed and cost-effectiveness
-            max_tokens=5, # Only need 1 token for '1' or '0'
-            messages=[{"role": "user", "content": prompt}]
-        )
+        # Use LangChain invoke method
+        response = llm.invoke(messages)
 
-        # Parse the response
+        # Parse the response from LangChain output
         interpretation_result = ""
-        if message.content and isinstance(message.content, list) and hasattr(message.content[0], 'text'):
-             interpretation_result = message.content[0].text.strip()
-        
-        logging.info(f"Anthropic Claude interpretation result: '{interpretation_result}'")
-        
+        if response and hasattr(response, 'content'):
+             interpretation_result = response.content.strip()
+
+        logging.info(f"LangChain Anthropic interpretation result: '{interpretation_result}'")
+
         if interpretation_result == "1":
             return 1
         else:
+            # Log if the output is not '1' for better debugging
+            if interpretation_result != "0":
+                logging.warning(f"Unexpected interpretation result: '{interpretation_result}'. Defaulting to 0 (no action).")
             return 0
-            
+
     except Exception as e:
-        logging.error(f"Error during Anthropic Claude voice response interpretation: {e}", exc_info=True)
+        # Catch potential exceptions during LangChain invocation
+        logging.error(f"Error during LangChain Anthropic voice response interpretation: {e}", exc_info=True)
         return 0 # Default to no action on error
 
 # --- User Specific RAG Context Retrieval Helper ---
@@ -465,14 +483,18 @@ def generate_notification_messages(disaster_alert: DisasterAlertData, user: User
     base_alert_info_en = f"{DISASTER_TYPE_MAP_KO_EN.get(disaster_alert.DST_SE_NM, disaster_alert.DST_SE_NM)} in {_extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM}"
     print(f"Base Alert Info for SMS RAG query: {base_alert_info_en}")
 
-    target_rag_len = 60 
+    target_rag_len = 60
     total_max_len = 70
-    rag_response_content = "" 
+    rag_response_content = ""
     global vectorstore
+
+    # Extract region name for prompt and fallback
+    region_name_for_prompt = _extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM
 
     if vectorstore is None:
         print("  WARNING: Vectorstore not available. Cannot generate RAG content.")
-        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({_extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM}) 발생. 관련 기관 안내 확인."
+        # Use extracted region name in fallback
+        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({region_name_for_prompt}) 발생. 관련 기관 안내 확인."
         rag_response_content = fallback_base[:total_max_len]
         return rag_response_content
 
@@ -480,100 +502,12 @@ def generate_notification_messages(disaster_alert: DisasterAlertData, user: User
         # Determine disaster type key for filtering RAG context
         disaster_type_ko = disaster_alert.DST_SE_NM
         disaster_type_en_key = next((en.lower().replace(" ", "") for ko, en in DISASTER_TYPE_MAP_KO_EN.items() if ko == disaster_type_ko), None)
-        
-        upstage_api_key = os.getenv("UPSTAGE_API_KEY")
-        llm = ChatUpstage(api_key=upstage_api_key, model="solar-pro")
-        
-        # Retriever setup: Filter ONLY by disaster type
-        search_kwargs = {}
-        if disaster_type_en_key:
-            search_kwargs['filter'] = {'disaster_type': disaster_type_en_key}
-            logging.info(f"Applying RAG metadata filter: disaster_type='{disaster_type_en_key}'")
-        else:
-            logging.warning("No disaster type filter applied for RAG retriever.")
-        retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
 
-        # Get RAG context based on disaster type
-        query = base_alert_info_en 
-        relevant_docs = retriever.get_relevant_documents(query)
-        rag_context = "\n\n".join([doc.page_content for doc in relevant_docs])
-        logging.info(f"Retrieved {len(relevant_docs)} docs for context (disaster filter only).")
+        # --- Use LangChain Anthropic (Claude 3.5 Sonnet) ---
+        # Initialize here, will re-initialize if max_tokens is used
+        llm = ChatAnthropic(model="claude-3-5-sonnet-20240620", temperature=0.1)
+        # ------------------------------------------------------
 
-        # --- Korean Prompt including User Type --- 
-        user_type_info = f"(수신자 특성: {user.vulnerability_type})"
-        prompt_template = f"""
-        제공된 정보와 참고 문서를 바탕으로, 가장 중요한 핵심 대처 방안 1가지를 포함하여 한국어로 간결한 비상 알림 메시지를 생성하세요.
-        {user_type_info} 이 정보를 참고하여 답변의 뉘앙스나 강조점을 조절할 수 있습니다.
-        목표 길이: {target_rag_len}자 내외. 추가 설명 없이 알림 내용만 출력하세요.
-
-        참고 문서:
-        {{context}}
-
-        입력 알림 정보 (재난 유형/지역):
-        {{question}}
-
-        알림 메시지 (목표 ~{target_rag_len}자, 한국어):
-        """
-        PROMPT = PromptTemplate(
-            template=prompt_template, input_variables=["context", "question"]
-        )
-        # -----------------------------------------
-
-        # Construct the full prompt and invoke LLM
-        full_prompt = PROMPT.format(context=rag_context, question=query)
-        llm_response = llm.invoke(full_prompt)
-        rag_summary_text = llm_response.content.strip() if llm_response and llm_response.content else ""
-        print(f"  LLM Generated SMS Response (raw): {rag_summary_text}")
-
-        # Truncation Logic
-        if not rag_summary_text:
-            fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({_extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM}). 공식 발표 확인."
-            rag_response_content = fallback_base[:total_max_len]
-        else:
-            rag_response_content = rag_summary_text
-            if len(rag_response_content) > total_max_len:
-                 rag_response_content = rag_response_content[:total_max_len]
-
-    except Exception as e:
-        print(f"  ERROR during LLM generation for SMS for user {user.id}: {e}")
-        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({_extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM}). 오류 발생. 관련 기관 확인."
-        rag_response_content = fallback_base[:total_max_len]
-
-    logging.info(f"Final generated KOREAN SMS content for user {user.id}: {rag_response_content}")
-    return rag_response_content
-
-# --- RAG Based VOICE Message Generation (Korean, takes user info for prompt) ---
-def generate_voice_alert_message(disaster_alert: DisasterAlertData, user: User) -> str: # Takes user object
-    """
-    Generates a Korean voice alert message considering user type via prompt.
-    Does NOT include the trailing 'Report' prompt here.
-    """
-    # --- Base Info & RAG Setup --- 
-    core_region_name = _extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM
-    disaster_type_ko = disaster_alert.DST_SE_NM
-    disaster_type_en = DISASTER_TYPE_MAP_KO_EN.get(disaster_type_ko, disaster_type_ko)
-    base_alert_info_en = f"{disaster_type_en} in {core_region_name}"
-    print(f"Base Alert Info for VOICE RAG query: {base_alert_info_en}")
-
-    target_rag_len = 90
-    voice_message_content = ""
-    global vectorstore
-
-    if vectorstore is None:
-        print("  WARNING: Vectorstore not available. Cannot generate RAG content for Voice.")
-        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({core_region_name}) 발생. 관련 기관 안내를 확인하십시오."
-        voice_message_content = fallback_base[:target_rag_len]
-        return voice_message_content
-
-    try:
-        # Determine disaster type key for filtering RAG context
-        disaster_type_en_key = next((en.lower().replace(" ", "") for ko, en in DISASTER_TYPE_MAP_KO_EN.items() if ko == disaster_type_ko), None)
-        
-        upstage_api_key = os.getenv("UPSTAGE_API_KEY")
-        if not upstage_api_key:
-             raise ValueError("UPSTAGE_API_KEY not found.")
-        llm = ChatUpstage(api_key=upstage_api_key, model="solar-pro")
-        
         # Retriever setup: Filter ONLY by disaster type
         search_kwargs = {}
         if disaster_type_en_key:
@@ -586,54 +520,194 @@ def generate_voice_alert_message(disaster_alert: DisasterAlertData, user: User) 
         # Get RAG context based on disaster type
         query = base_alert_info_en
         relevant_docs = retriever.get_relevant_documents(query)
-        rag_context = "\n\n".join([doc.page_content for doc in relevant_docs])
+        rag_context = "\\n\\n".join([doc.page_content for doc in relevant_docs])
         logging.info(f"Retrieved {len(relevant_docs)} docs for context (disaster filter only).")
 
-        # --- Korean Voice Prompt including User Type --- 
+        # --- Korean Prompt including User Type (REVISED for Brevity and Region) ---
         user_type_info = f"(수신자 특성: {user.vulnerability_type})"
-        prompt_template = f"""
-        Task: 한국어로 간결한 음성 안내 메시지의 핵심 내용을 생성.
-        Output Format: "[경보 종류] [지역] 상황. [핵심 행동 1-2가지]."
-        Strict Rules:
-        - 제공된 정보(Context, Input)와 수신자 특성({user_type_info})을 참고하여 생성.
-        - 핵심 행동은 Context에서 가져올 것.
-        - 지역명은 Input({base_alert_info_en}) 기반으로 하되 자연스럽게.
-        - 추가 설명 절대 금지.
-        - 목표 길이: {target_rag_len}자 내외.
-        - 끝에 'Report' 관련 문구는 절대 포함하지 말 것.
 
-        Context Documents (for action guidance):
+        prompt_template = f"""
+        Task: 한국어로 **매우 간결한** 비상 알림 SMS 메시지를 생성합니다.
+        Strict Rules:
+        1.  **반드시 [{region_name_for_prompt}] 지역명을 포함**해야 합니다.
+        2.  가장 중요한 핵심 대처 방안 **1가지**만 포함합니다 (참고 문서 활용).
+        3.  출력 형식은 \"**[재난 종류] [{region_name_for_prompt}] 상황. [핵심 행동 요약]**\" 형태를 따릅니다.
+        4.  {user_type_info} 정보를 참고하여 뉘앙스를 조절할 수 있습니다.
+        5.  **추가 설명이나 불필요한 표현 없이** 내용만 정확히 출력합니다.
+        6.  **목표 길이: {target_rag_len}자 이내** (절대 초과 금지).
+
+        참고 문서 (Context for action guidance):
         {{context}}
 
-        Input Alert Details (for disaster type/location):
+        입력 알림 정보 (Input for disaster type/location):
         {{question}}
 
-        Core Alert Message (Max {target_rag_len} chars, 한국어):
+        알림 메시지 (Max {target_rag_len} chars, Korean, MUST include '{region_name_for_prompt}'):
         """
         PROMPT = PromptTemplate(
             template=prompt_template, input_variables=["context", "question"]
         )
-        # ---------------------------------------------
-        
-        # Construct the full prompt and invoke LLM
-        full_prompt = PROMPT.format(context=rag_context, question=query)
-        llm_response = llm.invoke(full_prompt)
-        rag_summary_text = llm_response.content.strip() if llm_response and llm_response.content else ""
+        # --------------------------------------------------------------------
+
+        # Construct the full prompt and invoke LLM (Using LangChain invoke)
+        full_prompt_string = PROMPT.format(context=rag_context, question=query)
+
+        # Attempt to add max_tokens if supported by ChatAnthropic invoke
+        try:
+             # Re-initialize LLM here to add max_tokens constraint
+             llm_constrained = ChatAnthropic(
+                 model="claude-3-5-sonnet-20240620",
+                 temperature=0.1,
+                 max_tokens=int(total_max_len * 1.5) # Allow slightly more tokens
+             )
+             llm_response = llm_constrained.invoke(full_prompt_string)
+        except TypeError: # If max_tokens is not a direct argument for invoke
+             logging.warning("max_tokens might not be directly supported in invoke for SMS. Relying on Python truncation.")
+             llm_response = llm.invoke(full_prompt_string) # Use llm initialized earlier
+
+        rag_summary_text = llm_response.content.strip() if llm_response and hasattr(llm_response, 'content') else ""
+        print(f"  LLM Generated SMS Response (raw): {rag_summary_text}")
+
+        # Python-based Truncation Logic (as fallback or primary method)
+        if not rag_summary_text:
+            # Fallback should also include region name
+            fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({region_name_for_prompt}). 공식 발표 확인."
+            rag_response_content = fallback_base[:total_max_len]
+        else:
+            # Ensure region name is present, add if missing (simple check)
+            if region_name_for_prompt not in rag_summary_text:
+                 logging.warning(f"Region '{region_name_for_prompt}' missing in LLM SMS output. Prepending fallback info.")
+                 rag_summary_text = f"[{disaster_alert.DST_SE_NM} {region_name_for_prompt}] " + rag_summary_text
+
+            rag_response_content = rag_summary_text
+            if len(rag_response_content) > total_max_len:
+                 # Truncate if still too long
+                 rag_response_content = rag_response_content[:total_max_len]
+
+    except Exception as e:
+        # Make sure to log the error with the correct user ID context
+        print(f"  ERROR during LLM generation for SMS for user {user.id}: {e}")
+        # Use region name in fallback here too
+        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({region_name_for_prompt}). 오류 발생. 관련 기관 확인."
+        rag_response_content = fallback_base[:total_max_len]
+
+    logging.info(f"Final generated KOREAN SMS content for user {user.id}: {rag_response_content}")
+    return rag_response_content
+
+# --- RAG Based VOICE Message Generation (Korean, takes user info for prompt) ---
+def generate_voice_alert_message(disaster_alert: DisasterAlertData, user: User) -> str: # Takes user object
+    """
+    Generates a Korean voice alert message considering user type via prompt.
+    Does NOT include the trailing 'Report' prompt here.
+    """
+    # --- Base Info & RAG Setup ---
+    core_region_name = _extract_region_from_address(disaster_alert.RCPTN_RGN_NM) or disaster_alert.RCPTN_RGN_NM
+    disaster_type_ko = disaster_alert.DST_SE_NM
+    disaster_type_en = DISASTER_TYPE_MAP_KO_EN.get(disaster_type_ko, disaster_type_ko)
+    base_alert_info_en = f"{disaster_type_en} in {core_region_name}"
+    print(f"Base Alert Info for VOICE RAG query: {base_alert_info_en}")
+
+    target_rag_len = 90 # Keep target length
+    voice_message_content = ""
+    global vectorstore
+
+    # Use extracted region name
+    region_name_for_prompt = core_region_name
+
+    if vectorstore is None:
+        print("  WARNING: Vectorstore not available. Cannot generate RAG content for Voice.")
+        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({region_name_for_prompt}) 발생. 관련 기관 안내를 확인하십시오."
+        voice_message_content = fallback_base[:target_rag_len]
+        return voice_message_content
+
+    try:
+        # Determine disaster type key for filtering RAG context
+        disaster_type_en_key = next((en.lower().replace(" ", "") for ko, en in DISASTER_TYPE_MAP_KO_EN.items() if ko == disaster_type_ko), None)
+
+        # --- Use LangChain Anthropic (Claude 3.5 Sonnet) ---
+        llm = ChatAnthropic(model="claude-3-5-sonnet-20240620", temperature=0.1)
+        # ------------------------------------------------------
+
+        # Retriever setup: Filter ONLY by disaster type
+        search_kwargs = {}
+        if disaster_type_en_key:
+            search_kwargs['filter'] = {'disaster_type': disaster_type_en_key}
+            logging.info(f"Applying RAG metadata filter: disaster_type='{disaster_type_en_key}'")
+        else:
+            logging.warning("No disaster type filter applied for RAG retriever.")
+        retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
+
+        # Get RAG context based on disaster type
+        query = base_alert_info_en
+        relevant_docs = retriever.get_relevant_documents(query)
+        rag_context = "\\n\\n".join([doc.page_content for doc in relevant_docs])
+        logging.info(f"Retrieved {len(relevant_docs)} docs for context (disaster filter only).")
+
+        # --- Korean Voice Prompt including User Type (REVISED for Brevity and Region) ---
+        user_type_info = f"(수신자 특성: {user.vulnerability_type})"
+
+        prompt_template = f"""
+        Task: 한국어로 **매우 간결한** 음성 안내 메시지의 핵심 내용을 생성합니다.
+        Strict Rules:
+        1.  **반드시 [{region_name_for_prompt}] 지역명을 명확히 포함**해야 합니다.
+        2.  가장 중요한 핵심 대처 방안 **1-2가지**만 포함합니다 (참고 문서 활용).
+        3.  출력 형식은 \"**[{region_name_for_prompt}]에 [경보 종류] 발령. [핵심 행동 요약]**\" 형태를 따릅니다. # REVISED Output Format
+        4.  {user_type_info} 정보를 참고하여 뉘앙스를 조절할 수 있습니다.
+        5.  **추가 설명이나 불필요한 인사말 없이** 핵심 내용만 정확히 출력합니다.
+        6.  **목표 길이: {target_rag_len}자 이내** (절대 초과 금지).
+        7.  끝에 '신고' 또는 '도움' 관련 질문은 **절대 포함하지 마십시오**.
+
+        참고 문서 (Context for action guidance):
+        {{context}}
+
+        입력 알림 정보 (Input for disaster type/location):
+        {{question}}
+
+        핵심 알림 메시지 (Max {target_rag_len} chars, Korean, MUST include '{region_name_for_prompt}'):
+        """
+        PROMPT = PromptTemplate(
+            template=prompt_template, input_variables=["context", "question"]
+        )
+        # --------------------------------------------------------------------
+
+        # Construct the full prompt and invoke LLM (Using LangChain invoke)
+        full_prompt_string = PROMPT.format(context=rag_context, question=query)
+
+        # Attempt to add max_tokens if supported
+        try:
+             # Re-initialize LLM here to add max_tokens constraint
+             llm_constrained = ChatAnthropic(
+                 model="claude-3-5-sonnet-20240620",
+                 temperature=0.1,
+                 max_tokens=int(target_rag_len * 1.5) # Allow slightly more tokens
+             )
+             llm_response = llm_constrained.invoke(full_prompt_string)
+        except TypeError:
+             logging.warning("max_tokens might not be directly supported in invoke for voice message. Relying on Python truncation.")
+             llm_response = llm.invoke(full_prompt_string) # Use llm initialized earlier
+
+        rag_summary_text = llm_response.content.strip() if llm_response and hasattr(llm_response, 'content') else ""
         print(f"  LLM Generated Voice Response (raw core text): {rag_summary_text}")
 
-        # Truncation Logic
+        # Python-based Truncation Logic
         if not rag_summary_text:
             print("  WARNING: LLM generation resulted in empty string. Using fallback.")
-            fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({core_region_name}). 공식 발표 확인."
+            fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({region_name_for_prompt}). 공식 발표 확인."
             voice_message_content = fallback_base[:target_rag_len]
         else:
+             # Ensure region name is present, add if missing (simple check)
+            if region_name_for_prompt not in rag_summary_text:
+                 logging.warning(f"Region '{region_name_for_prompt}' missing in LLM Voice output. Prepending fallback info.")
+                 rag_summary_text = f"[{disaster_alert.DST_SE_NM} {region_name_for_prompt}] " + rag_summary_text
+
             voice_message_content = rag_summary_text
             if len(voice_message_content) > target_rag_len:
                  voice_message_content = voice_message_content[:target_rag_len]
 
     except Exception as e:
         print(f"  ERROR during LLM generation for Voice for user {user.id}: {e}")
-        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({core_region_name}). 오류 발생. 관련 기관 확인."
+        # Use region name in fallback here too
+        fallback_base = f"[경보] {disaster_alert.DST_SE_NM} ({region_name_for_prompt}). 오류 발생. 관련 기관 확인."
         voice_message_content = fallback_base[:target_rag_len]
 
     logging.info(f"Final generated KOREAN VOICE core content for user {user.id}: {voice_message_content}")
@@ -778,13 +852,16 @@ def get_dashboard_summary(request: Request, db: Session = Depends(get_db)):
 
     summaries: List[RegionSummary] = []
     
-    # Access chat model from app state
-    chat_model = getattr(request.app.state, 'chat_model', None)
-    
-    if not chat_model:
-        logging.error("Chat model not available from app state for summarization.")
-        # Return empty list or raise error, depending on desired behavior
+    # --- Use LangChain Anthropic (Claude 3.5 Sonnet) directly --- 
+    # No need to get from app.state if we instantiate it here
+    try:
+        # API Key is read from environment variables automatically
+        llm = ChatAnthropic(model="claude-3-5-sonnet-20240620", temperature=0.2) # Use Claude 3.5 for summarization
+    except Exception as e:
+        logging.error(f"Failed to initialize ChatAnthropic for dashboard summary: {e}")
+        # Return empty list or raise error if LLM is essential
         return [] 
+    # -----------------------------------------------------------
 
     # 2. Summarize responses for each region
     for region, responses in region_responses.items():
@@ -794,13 +871,14 @@ def get_dashboard_summary(request: Request, db: Session = Depends(get_db)):
         # Combine responses into a context string
         context = "\n".join([f"- {res}" for res in responses])
         
-        # Create prompt for summarization
+        # Create prompt for summarization (Keep existing prompt)
         prompt = f"다음은 [{region}] 지역 사용자들의 최근 보고 내용입니다. 이 내용을 바탕으로 해당 지역의 현재 상황을 한국어로 간결하게 요약해주세요.:\n\n{context}"
         
         try:
-            # Call the Upstage LLM
+            # Call the Claude LLM via LangChain invoke
             logging.info(f"Generating summary for region: {region}")
-            llm_response = chat_model.invoke(prompt)
+            llm_response = llm.invoke(prompt) # Invoke with the prompt string
+            
             # Ensure the response content is a string
             summary_text = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
             logging.info(f"Generated summary: {summary_text}")
@@ -1089,7 +1167,7 @@ async def simulate_disaster(request: Request, disaster_alert: DisasterAlertData,
         raise HTTPException(status_code=500, detail="Twilio configuration error, cannot send notifications.")
         
     # Update the hardcoded base URL to the currently correct one
-    hardcoded_base_url = "https://71d4c4523155.ngrok.app" 
+    hardcoded_base_url = "https://codewave.ngrok.app" # Updated Ngrok URL
     
     sms_sent_count = 0
     sms_failed_count = 0
@@ -1217,18 +1295,26 @@ async def simulate_disaster(request: Request, disaster_alert: DisasterAlertData,
             
             try:
                 response = VoiceResponse()
+                
+                # Determine appropriate hints based on language
+                if tts_code == 'ko-KR':
+                    speech_hints = "신고, 도움, 구조, 위치" # Korean hints
+                else: # Default to English hints
+                    speech_hints = "help, emergency, injured, fire, flood, report, safe, not safe, need assistance, my location is" # English hints
+                    
                 gather = Gather(input='speech', 
                                 action=action_url, 
                                 method='POST', 
                                 language=tts_code, # Use determined TTS language for speech recognition
                                 speechTimeout='auto',
                                 actionOnEmptyResult=True,
-                                hints="report") # Keep hint simple for now
+                                hints=speech_hints) # Use dynamic hints
                 
                 # Say the main alert message with correct voice/language
                 gather.say(voice_content_final, voice=tts_voice, language=tts_code)
                 # Append a more open-ended prompt for the LLM interpretation
-                report_prompt = " 도움이 필요하시면 말씀해주세요." if tts_code == 'ko-KR' else " If you need assistance, please state your request now."
+                # REVISED English prompt to reflect reporting assistance
+                report_prompt = " 도움이 필요하시면 말씀해주세요." if tts_code == 'ko-KR' else "If you need assistance, please describe the situation, and we can help report it."
                 gather.say(report_prompt, voice=tts_voice, language=tts_code)
                 
                 response.append(gather)
@@ -1557,10 +1643,19 @@ async def handle_voice_alert_response(request: Request, db: Session = Depends(ge
         if emergency_phone_number and client and twilio_phone_number:
             try:
                 # Prepare the message to be spoken on the call
-                spoken_message = f"[코드웨이브 긴급 알림] 사용자 {caller_phone_number} 로부터 지원 요청 또는 신고가 접수되었습니다. 사용자 음성 메시지: {speech_result}"
+                user_location_info = "위치 정보 없음" # Default if address is missing
+                if db_user and db_user.address:
+                    user_location_info = db_user.address
+                elif db_user and db_user.latitude and db_user.longitude:
+                    user_location_info = f"위도 {db_user.latitude:.4f}, 경도 {db_user.longitude:.4f}"
+                
+                # REVISED: English spoken message template
+                spoken_message = f"[CodeWave Emergency Alert] Assistance request or report received from user {caller_phone_number} (Location: {user_location_info}). User message: {speech_result}"
+                
                 # Create TwiML for the outbound call
                 emergency_call_twiml = VoiceResponse()
-                emergency_call_twiml.say(spoken_message, voice='Polly.Seoyeon', language='ko-KR')
+                # REVISED: Use English voice and language
+                emergency_call_twiml.say(spoken_message, voice='Polly.Joanna', language='en-US')
                 emergency_call_twiml.hangup()
                 
                 logging.info(f"  -> Initiating call to EMERGENCY_PHONE_NUMBER ({emergency_phone_number}) from {twilio_phone_number}")
@@ -1736,21 +1831,9 @@ def setup_database_and_rag(app: FastAPI):
         print(f"CRITICAL ERROR during vectorstore setup: {e}")
         vectorstore = None # Ensure vectorstore is None on error
 
-    # --- Initialize Chat Model --- 
-    print("Attempting to initialize ChatUpstage model...")
-    if upstage_api_key:
-        try:
-            chat_model = ChatUpstage(api_key=upstage_api_key, model="solar-pro") # Or use a different model if needed
-            app.state.chat_model = chat_model # Store in app state
-            print("ChatUpstage model initialized successfully.")
-        except Exception as e:
-            print(f"CRITICAL ERROR during ChatUpstage model initialization: {e}")
-            chat_model = None
-            app.state.chat_model = None
-    else:
-        print("  WARNING: UPSTAGE_API_KEY not found. Chat model cannot be initialized.")
-        chat_model = None
-        app.state.chat_model = None
+    # --- Removed Chat Model Initialization from app.state --- 
+    # Chat models are now initialized directly within the functions that use them.
+    # (Previous code initializing ChatUpstage and assigning to app.state.chat_model removed)
 
 # --- Main Execution Block (No table creation here anymore) ---
 if __name__ == "__main__":
